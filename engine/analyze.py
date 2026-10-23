@@ -1069,7 +1069,7 @@ def analyze_stems(path, mix_rms_db, *, model="htdemucs", cache_dir=None, want_pi
     # 教训 2026-10-23：把字段名从 longest_run 改成 longest_sec 后，缓存没版本号，
     # 旧 json 里读不到新字段，于是全曲显示「最长连续 0.00 秒」——误以为是算法坏了，
     # 查到最后是缓存。凡是往缓存里加/改字段，都要动这个数字。
-    raw_key = (f"{os.path.abspath(path)}|{st.st_size}|{int(st.st_mtime)}|{model}|v4")
+    raw_key = (f"{os.path.abspath(path)}|{st.st_size}|{int(st.st_mtime)}|{model}|v8")
     key = hashlib.sha1(raw_key.encode("utf-8")).hexdigest()[:16]
     cpath = os.path.join(root, f"{key}.json")
     if os.path.exists(cpath):
@@ -1129,6 +1129,40 @@ def analyze_stems(path, mix_rms_db, *, model="htdemucs", cache_dir=None, want_pi
         else:
             present, label = True, "有人声"
         out["vocals"] = {"present": present, "ratio": r, "label": label}
+
+    # 逐 16 秒块的四轨能量（给事件时间线用）：
+    # 有了它才能说「是哪一部分变了」，而不只是「整体变响了」。
+    try:
+        import soundfile as _sf
+        from demucs_onnx.inference import SAMPLE_RATE as _SR4
+        try:
+            _orig_dur = float(_sf.info(path).duration)
+        except Exception:
+            _orig_dur = None
+        _step = int(16.0 * _SR4)
+        _blk = {}
+        for _nm2, _w2 in res.items():
+            _a4 = np.asarray(_w2, dtype=np.float64)
+            if _a4.ndim == 2:
+                _a4 = _a4.mean(axis=0) if _a4.shape[0] <= _a4.shape[1] else _a4.mean(axis=1)
+            _a4 = _a4.reshape(-1)
+            _vals = []
+            for _i2 in range(0, len(_a4), _step):
+                # 分轨可能比原曲长（demucs 补零）——超出原曲时长的部分不要
+                if _orig_dur is not None and (_i2 / _SR4) >= _orig_dur:
+                    break
+                _seg2 = _a4[_i2:_i2 + _step]
+                if len(_seg2) < _step // 2:
+                    continue
+                _vals.append({
+                    "start_sec": round(_i2 / _SR4, 1),
+                    "end_sec": round((_i2 + len(_seg2)) / _SR4, 1),
+                    "db": round(20 * np.log10(float(np.sqrt(np.mean(_seg2 ** 2))) + 1e-12), 1),
+                })
+            _blk[_nm2] = _vals
+        out["block_db"] = _blk
+    except Exception as _e2:  # noqa: BLE001
+        out["block_db_error"] = f"{type(_e2).__name__}: {_e2}"
 
     # 无人声区间是分轨的直接产物，不该只在跑 ASR 时才算。
     vw = res.get("vocals")
@@ -1195,18 +1229,37 @@ def analyze_stems(path, mix_rms_db, *, model="htdemucs", cache_dir=None, want_pi
     if want_pitch:
         try:
             from demucs_onnx.inference import SAMPLE_RATE as _SR3
+
+            def _ratio_of(_w):
+                _a2 = np.asarray(_w, dtype=np.float64)
+                if _a2.ndim == 2:
+                    _a2 = _a2.mean(axis=0) if _a2.shape[0] <= _a2.shape[1] else _a2.mean(axis=1)
+                _a2 = _a2.reshape(-1)
+                _db = 20 * np.log10(float(np.sqrt(np.mean(_a2 ** 2))) + 1e-12)
+                return (10.0 ** (_db / 10.0)) / max(10.0 ** (mix_rms_db / 10.0), 1e-12)
+
             _vr = (out.get("vocals") or {}).get("ratio")
-            if _vr is not None and _vr < 0.01:
-                # 人声轨能量太低：跑了也是在泄漏上硬追，白花 4–8 秒，还给出一组像样的假数据。
-                # 注意措辞：这只说明「分轨没分出足够的人声」，不等于「原曲一定没有人声」。
+            _or = _ratio_of(res["other"]) if res.get("other") is not None else None
+
+            # 哪条轨值得跑 —— 不是一刀切跳过。
+            # 纯器乐（钢琴/弦乐独奏）的旋律在 other 里，人声轨占比低是正常的，
+            # 之前因为 vocals<1% 就把两条轨一起跳掉，等于把纯器乐的旋律也丢了。
+            _targets = []
+            if _vr is not None and _vr >= 0.01:
+                _targets.append("vocals")
+            if _or is not None and _or >= 0.01:
+                _targets.append("other")
+
+            if not _targets:
                 out["pitch"] = {
-                    "status": "skipped_low_vocal_energy",
+                    "status": "skipped_low_energy",
                     "vocals_ratio": _vr,
-                    "note": "人声轨能量不足以支持音高分析；不等于原曲没有人声",
+                    "other_ratio": _or,
+                    "note": "两轨能量都太低，测不出稳定旋律；不等于原曲没有内容",
                 }
             else:
                 _pit = {}
-                for _nm in ("vocals", "other"):
+                for _nm in _targets:
                     _w = res.get(_nm)
                     if _w is None:
                         continue
@@ -1390,15 +1443,51 @@ def analyze_lyrics(path, *, model="base", cache_dir=None):
         return {"available": False, "reason": "没有分离出人声轨"}
     mono = arr.mean(axis=0) if arr.ndim == 2 else arr
     v_db = 20.0 * np.log10(float(np.sqrt(np.mean(mono ** 2))) + 1e-12)
-    if v_db < -60:
+    # 纯器乐保护：绝对能量低 **或** 相对混音低都算「人声几乎没有」。
+    # 只卡绝对 -60 dBFS 不够 —— 实测人声占比 0.08% 的纯配乐，vocals 仍在 -31 dBFS 左右，
+    # 会漏进 Whisper，然后被「听写」出一句幻听歌词（用户 2026-10-23 反馈的真实案例）。
+    _mix_db = None
+    try:
+        import soundfile as _sf2
+        _info = _sf2.info(path)
+        _mix_rms = float(getattr(_info, "frames", 0) or 0)
+        # 用整首混音 RMS 估一个参照（不必精确，只用来判断「人声是不是几乎不存在」）
+        _y_mix, _ = librosa.load(path, sr=SAMPLE_RATE, mono=True, duration=30.0)
+        _mix_db = 20.0 * np.log10(float(np.sqrt(np.mean(_y_mix ** 2))) + 1e-12)
+    except Exception:
+        _mix_db = None
+
+    _rel_db = (v_db - _mix_db) if _mix_db is not None else None
+    _ev = {"vocals_dbfs": round(v_db, 1),
+           "mix_dbfs": None if _mix_db is None else round(_mix_db, 1),
+           "vocals_minus_mix_db": None if _rel_db is None else round(_rel_db, 1)}
+    _inst_all = [{"start_sec": 0.0, "end_sec": round(len(mono) / SAMPLE_RATE, 1)}]
+
+    # 三级门控（阈值是临时工程参数，未用人标样本校准）
+    #   A ≤ -20 dB        证据不足，不跑 ASR
+    #   B -20 ~ -15 dB    灰区，不跑也不给歌词
+    #   C ≥ -15 dB        允许跑，但结果仍要过可信段筛选
+    if v_db < -60 or (_rel_db is not None and _rel_db <= -20):
+        _why = ("人声轨几乎没有能量" if v_db < -60
+                else f"人声轨相对混音低 {_rel_db:.0f} dB，证据不足以支持歌词")
         return {"available": True, "model": model, "segments": [], "trusted": [],
-                "draft": [],
-                "instrumental": [{"start_sec": 0.0,
-                                  "end_sec": round(len(mono) / SAMPLE_RATE, 1)}],
-                "stats": {"vocals_dbfs": round(v_db, 1), "segments": 0,
-                          "trusted": 0, "doubt": 0, "hallucination": 0,
-                          "trusted_ratio": 0.0,
-                          "note": "人声轨几乎没有能量,按纯器乐处理"}}
+                "draft": [], "instrumental": _inst_all,
+                "transcription_status": "skipped_low_vocal_evidence",
+                "vocal_evidence": _ev,
+                "stats": {**_ev, "segments": 0, "trusted": 0, "doubt": 0,
+                          "hallucination": 0, "trusted_ratio": 0.0,
+                          "note": f"{_why}；未执行听写"}}
+
+    if _rel_db is not None and _rel_db < -15:
+        return {"available": True, "model": model, "segments": [], "trusted": [],
+                "draft": [], "instrumental": _inst_all,
+                "transcription_status": "withheld_ambiguous_vocal_evidence",
+                "vocal_evidence": _ev,
+                "stats": {**_ev, "segments": 0, "trusted": 0, "doubt": 0,
+                          "hallucination": 0, "trusted_ratio": 0.0,
+                          "note": f"人声轨相对混音低 {_rel_db:.0f} dB，证据处于灰区；"
+                                  "未执行听写，也不给歌词。这只说明证据不足，"
+                                  "不代表已证明没有人声"}}
 
     # 无人声区间:用绝对能量判(实测结论),占比法会误报
     inst_ranges = _instrumental_ranges(mono, SAMPLE_RATE)
@@ -1463,11 +1552,24 @@ def analyze_lyrics(path, *, model="base", cache_dir=None):
         "vocals_dbfs": round(v_db, 1),
         "elapsed_sec": round(_time.time() - t0, 1),
     }
-    draft = [r for r in rows if r["label"] == "存疑" and r["text"]]
+    _draft_rows = [r for r in rows if r["label"] == "存疑" and r["text"]]
     stats["instrumental"] = len(inst_ranges)
-    return {"available": True, "model": model, "segments": rows,
-            "trusted": trusted, "draft": draft,
-            "instrumental": inst_ranges, "stats": stats}
+    stats["draft_withheld"] = len(_draft_rows)
+    # 2026-10-23 撤掉「降级稿」：未通过筛选的识别文本不进正式输出。
+    # 理由（用户决策 + 外部建议）：把幻听文字连同警告一起交给下游模型，
+    # 模型仍会优先采用具体文字；真正的隔离是不让它出现在输入里。
+    _status = ("completed_with_accepted_segments" if trusted
+               else "completed_no_accepted_segments")
+    # segments 里「存疑 / 疑幻觉」两类的正文一并清空，只留标签和时间，
+    # 否则它会从另一个字段泄漏出去。
+    _safe_rows = [({"start_sec": r["start_sec"], "end_sec": r["end_sec"],
+                     "label": r["label"]}
+                    if r["label"] != "可信" else r) for r in rows]
+    return {"available": True, "model": model, "segments": _safe_rows,
+            "trusted": trusted, "draft": [],
+            "instrumental": inst_ranges, "stats": stats,
+            "transcription_status": _status,
+            "vocal_evidence": _ev}
 
 
 def quick_transcribe(y, sr, model="tiny", max_lines=4):
@@ -1716,12 +1818,12 @@ def emit_pitch(stems, y, sr):
     print()
     _pit = (stems or {}).get("pitch") or {}
 
-    # 人声轨能量太低 → 直接跳过，不给数字
-    if _pit.get("status") == "skipped_low_vocal_energy":
+    # 两轨都没能量 → 直接跳过，不给数字
+    if _pit.get("status") == "skipped_low_energy":
         _vr = _pit.get("vocals_ratio") or 0.0
-        print(f"[音高] 未计算 —— 人声轨能量占比仅 {_vr * 100:.2f}%（低于 1% 的临时规则）。")
-        print("       这一轨里大半是泄漏，跑了 pyin 也只是在噪声上硬追。")
-        print("       注意：这只说明分轨没分出足够的人声，不代表原曲一定没有人唱。")
+        _or = _pit.get("other_ratio") or 0.0
+        print(f"[音高] 未计算 —— 两条轨能量都太低（vocals {_vr * 100:.2f}% / other {_or * 100:.2f}%）。")
+        print("       没有稳定的旋律线可追。注意：这不代表原曲没有内容。")
         return
 
     if _pit:
@@ -1738,7 +1840,10 @@ def emit_pitch(stems, y, sr):
             else:
                 print(f"[音高] {_zh}：测不出稳定基频（{_ps.get('reason', '未知')}）")
         _vr = ((stems or {}).get("vocals") or {}).get("ratio")
-        if _vr is not None and _vr < 0.10:
+        if "vocals" not in _pit and _vr is not None:
+            print(f"       人声轨只占 {_vr * 100:.2f}%，没有可用的人声旋律 —— "
+                  "上面只有器乐轨（纯器乐的音高来自这里，不是人唱的）。")
+        elif _vr is not None and _vr < 0.10:
             print(f"       ⚠ 人声轨只占 {_vr * 100:.1f}% —— 这一轨里大半是泄漏，"
                   "它的音域不能当「人唱的音域」用。")
         print("       ⚠ 状态：已计算、未验证（computed_unverified）。这些是 pyin 的候选音高，"
@@ -1775,6 +1880,224 @@ def _cross_links(ab, es, inst_ranges, med_db):
         elif drop >= 12:
             out.append(f"{span} 没人唱，能量也塌了 {drop:.0f} dB —— 这一段是留白，不是伴奏在顶。")
     return out
+
+
+def _find_hook(ab, es, blocks, inst_ranges, asr):
+    """找「钩子」——几个测量同时到达峰值的位置。
+
+    不叫"副歌"：这只是"能量 / 起音密度 /（有歌词时）字数密度同时最高"，
+    位置不等于段落角色。没人唱的位置会被扣分。
+
+    注意 blocks 的元素是元组 (start_sec, end_sec, energy)，不是字典。
+    """
+    if es is None or not blocks or len(es) < 4:
+        return None
+    n = min(len(es), len(blocks))
+    e_arr = np.asarray(es[:n], dtype=float)
+
+    act = np.full(n, np.nan)
+    for i, blk in enumerate(blocks[:n]):
+        t0, t1 = blk[0], blk[1]
+        vals = [a.get("onsets", 0.0) for a in (ab or [])
+                if a.get("start_sec", 0) < t1 and a.get("end_sec", 0) > t0]
+        if vals:
+            act[i] = float(np.mean(vals))
+
+    lyr = np.zeros(n)
+    if asr and asr.get("trusted"):
+        for r in asr["trusted"]:
+            for i, blk in enumerate(blocks[:n]):
+                if blk[0] < r["end_sec"] and blk[1] > r["start_sec"]:
+                    lyr[i] += len(str(r.get("text", "")))
+    has_lyr = bool(lyr.any())
+
+    def _z(a):
+        m, s = float(np.nanmean(a)), float(np.nanstd(a))
+        if not np.isfinite(m) or s < 1e-9:
+            return np.zeros(n)
+        return (a - m) / s
+
+    score = _z(e_arr) * 0.5 + (_z(act) * 0.3 if not np.all(np.isnan(act)) else 0.0)
+    if has_lyr:
+        score = score + _z(lyr) * 0.2
+
+    # 没人唱的块扣分：钩子通常在唱的地方
+    if inst_ranges:
+        for i, blk in enumerate(blocks[:n]):
+            for r in inst_ranges:
+                if blk[0] < r["end_sec"] and blk[1] > r["start_sec"]:
+                    score[i] -= 0.6
+                    break
+
+    order = np.argsort(-score)
+    picks = [int(i) for i in order[:2] if score[i] > 0.3]
+    if not picks:
+        return None
+
+    _a_ok = act[~np.isnan(act)]
+    _a_p75 = float(np.nanpercentile(_a_ok, 75)) if len(_a_ok) else float("nan")
+
+    def _desc(i):
+        parts = []
+        if e_arr[i] >= float(np.nanpercentile(e_arr, 75)):
+            parts.append("能量在峰值区")
+        if not np.isnan(act[i]) and np.isfinite(_a_p75) and act[i] >= _a_p75:
+            parts.append("起音最密")
+        if has_lyr and lyr[i] >= float(np.percentile(lyr, 75)):
+            parts.append("歌词最密")
+        if inst_ranges and any(blocks[i][0] < r["end_sec"]
+                               and blocks[i][1] > r["start_sec"] for r in inst_ranges):
+            parts.append("这段没人唱")
+        return " / ".join(parts) if parts else "综合分最高"
+
+    lines = []
+    b0 = blocks[picks[0]]
+    lines.append(f"最可能是钩子的位置：{fmt_time(b0[0])}–{fmt_time(b0[1])}"
+                 f"（{_desc(picks[0])}）")
+    if len(picks) > 1:
+        b1 = blocks[picks[1]]
+        lines.append(f"次选：{fmt_time(b1[0])}–{fmt_time(b1[1])}"
+                     f"（{_desc(picks[1])}）")
+    lines.append("说明：这是几个测量同时到峰值的位置，不是已经确认的副歌——"
+                 "段落角色要听过才知道。")
+    return lines
+
+
+def _timeline(ab, es, blocks, inst_ranges, block_db=None):
+    """把能量 / 起音密度 / 人声状态串成事件时间线。
+
+    三条规矩（按 GPT 的建议改的）：
+      1. **不做均匀采样** —— 那会让曲式看起来「每分钟一件事」，是假的
+      2. 相邻同向的变化**合并成一个过程**，并记下它持续了多久
+      3. 事件按「幅度 × 持续」筛，不是按时间均分
+    只报发生了什么，不命名段落角色。
+    """
+    if es is None or not blocks or len(es) < 4:
+        return []
+    n = min(len(es), len(blocks))
+    e = np.asarray(es[:n], dtype=float)
+    t0 = [blocks[i][0] for i in range(n)]
+    t1 = [blocks[i][1] for i in range(n)]
+
+    def _has_voc(i):
+        if not inst_ranges:
+            return None
+        for r in inst_ranges:
+            if t0[i] < r["end_sec"] and t1[i] > r["start_sec"]:
+                return False
+        return True
+
+    voc = [_has_voc(i) for i in range(n)]
+    act = np.full(n, np.nan)
+    for i in range(n):
+        vals = [a.get("onsets", 0.0) for a in (ab or [])
+                if a.get("start_sec", 0) < t1[i] and a.get("end_sec", 0) > t0[i]]
+        if vals:
+            act[i] = float(np.mean(vals))
+
+    # ---- 第一层：找变化候选 ----
+    cand = []
+    for i in range(1, n):
+        de = e[i] - e[i - 1]
+        da = (act[i] - act[i - 1]) if (not np.isnan(act[i]) and not np.isnan(act[i - 1])) else 0.0
+        vch = (voc[i] != voc[i - 1]) if (voc[i] is not None and voc[i - 1] is not None) else False
+        if abs(de) >= 1.5 or abs(da) >= 0.8 or vch:
+            cand.append({"i": i, "de": de, "da": da, "vch": vch})
+
+    # ---- 第二层：相邻同向的合并成一个过程 ----
+    groups = []
+    for c in cand:
+        if groups:
+            g = groups[-1]
+            near = c["i"] - g["end"] <= 2
+            same_dir = (np.sign(c["de"]) == np.sign(g["de"]) or
+                        np.sign(c["da"]) == np.sign(g["da"]))
+            if near and same_dir and not c["vch"]:
+                g["end"] = c["i"]
+                g["de"] += c["de"]
+                g["da"] += c["da"]
+                continue
+        groups.append({"start": c["i"], "end": c["i"],
+                       "de": c["de"], "da": c["da"], "vch": c["vch"]})
+
+    # ---- 输出 ----
+    events = []
+    for g in groups:
+        i0, i1 = g["start"], g["end"]
+        span = t1[i1] - t0[i0]
+        # 归纳在前，绝对值在后 —— 两组 A/B 测试里各赢一半，合起来信息最全
+        _e0 = e[min(i0 - 1, n - 1)]
+        _e1 = e[min(i1, n - 1)]
+        _a0 = act[min(i0 - 1, n - 1)] if not np.isnan(act[min(i0 - 1, n - 1)]) else None
+        _a1 = act[min(i1, n - 1)] if not np.isnan(act[min(i1, n - 1)]) else None
+        _vals = f"能量 {_e0:.0f}→{_e1:.0f} dB"
+        if _a0 is not None and _a1 is not None:
+            _vals += f"、起音 {_a0:.0f}→{_a1:.0f}"
+        parts = []
+        if abs(g["de"]) >= 1.5:
+            parts.append(f"能量{'上升' if g['de'] > 0 else '回落'} {abs(g['de']):.0f} dB")
+        if abs(g["da"]) >= 0.8:
+            parts.append(f"起音{'变密' if g['da'] > 0 else '变疏'}")
+        if g["vch"]:
+            parts.append("人声进入" if voc[i0] else "人声退出")
+        if not parts:
+            continue
+        if g["de"] > 2 and g["da"] > 0.8:
+            parts = [f"编曲加码（{_vals}）"]
+        elif g["de"] < -2 and g["da"] < -0.8:
+            parts = [f"动态收缩（{_vals}）"]
+        elif g["de"] > 2 and g["da"] < -0.8:
+            # 变响但瞬态更少 —— 不是靠「加东西」堆上去的
+            parts = [f"能量升、起音未增（{_vals}）"]
+        elif g["de"] < -2 and g["da"] > 0.8:
+            parts = [f"能量降、起音反增（{_vals}）"]
+        # 哪条轨变了 —— 分轨逐块能量（有 --stems 时才有）
+        ZH = {"vocals": "人声", "drums": "鼓", "bass": "贝斯", "other": "伴奏"}
+        if block_db:
+            _best = None
+            # 只在混音能量覆盖的时间范围内引用分轨 —— demucs 输出可能比输入长（补零），
+            # 补零块的分轨值是假数据，会让尾部事件出现「整体塌了但伴奏变响」的假象。
+            _mix_end = t1[n - 1]
+            _t_a = min(t0[i0], _mix_end - 0.1)
+            _t_b = min(t1[i1], _mix_end - 0.1)
+            for _nm, _vals in block_db.items():
+                def _db_at(_t):
+                    for _bx in _vals:
+                        if _bx["start_sec"] <= _t < _bx["end_sec"]:
+                            # 块必须完全落在混音时间范围内，否则是 demucs 在尾部编出来的
+                            if _bx["end_sec"] > _mix_end + 1.0:
+                                return None
+                            return _bx["db"]
+                    return None
+                _da, _dbb = _db_at(_t_a), _db_at(_t_b)
+                if _da is not None and _dbb is not None:
+                    _d = _dbb - _da
+                    if _best is None or abs(_d) > abs(_best[1]):
+                        _best = (_nm, _d)
+            if _best and abs(_best[1]) >= 3:
+                # 人声刚进出时不再报「人声变响/变轻」——那是边界上的残余，会自相矛盾
+                if not (g["vch"] and _best[0] == "vocals"):
+                    parts.append(f"{ZH.get(_best[0], _best[0])}"
+                                 f"{'变响' if _best[1] > 0 else '变轻'} {abs(_best[1]):.0f} dB")
+        tail = f"，该状态持续 {span:.0f} 秒" if span >= 32 else ""
+        events.append((t0[i0], "；".join(parts) + tail,
+                       abs(g["de"]) / 3.0 + abs(g["da"]) * 2 + span / 60.0))
+
+    # 开头状态
+    head = []
+    if e[0] <= float(np.percentile(e, 25)):
+        head.append("能量偏低")
+    if voc[0] is False:
+        head.append("人声未进")
+    if not np.isnan(act[0]) and act[0] <= float(np.nanpercentile(act, 25)):
+        head.append("起音稀疏")
+    if head:
+        events.insert(0, (0.0, "开场：" + "、".join(head), 1.0))
+
+    # 按重要性筛（不是按时间均分），最多 8 条
+    events.sort(key=lambda x: -x[2])
+    keep = sorted(events[:8], key=lambda x: x[0])
+    return [(ts, txt) for ts, txt, _ in keep]
 
 
 def verdict_lines(d):
@@ -1974,24 +2297,37 @@ def verdict_lines(d):
         if _links:
             out.append("[关联] " + _links[0])
             out.extend("       " + ln for ln in _links[1:])
+
+    # 事件时间线：把能量 / 起音 / 人声串成先后关系
+    # 不要加 d.get("detail") 条件 —— verdict_lines 只在默认路径被调用，
+    # 加了条件等于永远不显示（--detail 走的是另一条输出路径）。
+    _tl = _timeline(ab, es, blocks, _inst,
+                    (d.get("stems") or {}).get("block_db"))
+    if _tl:
+        out.append("[时间线]")
+        for _ts, _txt in _tl:
+            out.append(f"       {fmt_time(_ts)}  {_txt}")
+
+    # 钩子检测：能量 / 起音 /（有歌词时）字数，几项同时到峰值的位置
+    _hook = _find_hook(ab, es, blocks, _inst, asr)
+    if _hook:
+        out.append("[钩子] " + _hook[0])
+        out.extend("       " + ln for ln in _hook[1:])
     if asr and asr.get("available"):
         st = asr.get("stats") or {}
         if st.get("note"):
             out.append(f"[听写] {st['note']}")
         elif not asr.get("trusted"):
-            _draft = asr.get("draft") or []
-            if _draft:
-                out.append("[听写] 无可信段;以下为降级稿 —— 机器听写、把握低,"
-                           "只可作音译参考,别当正式歌词:")
-                for r in _draft[:12]:
-                    out.append(f"       {fmt_time(r['start_sec'])} {r['text']}")
-                _n = int((asr.get("stats") or {}).get("hallucination", 0))
-                if _n:
-                    out.append(f"       另有 {_n} 段疑幻觉未给正文"
-                               "(编得太顺,给了更易被当真)")
+            # 2026-10-23 撤掉降级稿：不给未经筛选的识别正文，只给状态和统计。
+            _n_draft = int(st.get("draft_withheld", 0))
+            _n_hall = int(st.get("hallucination", 0))
+            if _n_draft or _n_hall:
+                out.append(f"[听写] 已执行听写，但没有任何一段通过可信度筛选"
+                           f"（{_n_draft} 段存疑、{_n_hall} 段疑幻觉，正文不提供）—— "
+                           "不把未验证的文字当歌词用")
             else:
-                out.append("[听写] 本曲没有可用的歌词段(可能是外语/吟唱,也可能是模型在编);"
-                           "别因此当成纯器乐")
+                out.append("[听写] 已执行听写，没有可用的歌词段"
+                           "(可能是外语/吟唱，也可能是模型在编)；别因此当成纯器乐")
         else:
             out.append(f"[听写] 机器听写候选(可能有错),较确定"
                        f" {len(asr['trusted'])}/{st.get('segments', '?')} 段:")
@@ -2283,11 +2619,11 @@ def main():
                 "asr": ({"available": True, "model": asr.get("model"),
                          "trusted": [{"t": r["start_sec"], "text": r["text"]}
                                      for r in (asr.get("trusted") or [])],
-                         # 降级稿:可信段为空时,也给出「存疑」段,
-                         # 宁可给把握低的音译,也不回「什么都没听出来」。
-                         # 疑幻觉段仍不给正文 —— 它编得最顺,给了最容易被当真。
-                         "draft": [{"t": r["start_sec"], "text": r["text"]}
-                                   for r in (asr.get("draft") or [])],
+                         # 2026-10-23 撤掉降级稿：未通过筛选的文字不给正文。
+                         # 只留数量，让人知道「跑过了但没有可用段」。
+                         "draft_withheld": int((asr.get("stats") or {}).get("draft_withheld", 0)),
+                         "transcription_status": asr.get("transcription_status"),
+                         "vocal_evidence": asr.get("vocal_evidence"),
                          "inst": [{"a": r["start_sec"], "b": r["end_sec"]}
                                   for r in (asr.get("instrumental") or [])],
                          "stats": asr.get("stats")}
