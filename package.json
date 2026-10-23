@@ -1,0 +1,28 @@
+{
+  "name": "dsh-soundcheck",
+  "version": "0.7.0",
+  "description": "Local music analysis for DSH: audio -> a short human-readable verdict",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    }
+  },
+  "files": [
+    "lib",
+    "engine",
+    "dsh-plugin.json",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "os": [
+    "win32"
+  ],
+  "license": "MIT"
+}

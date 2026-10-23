@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/T-Auto/dsh-std/8a15541117cb3c13ddb8f2468308691b6051d162/packages/manifest/schema/dsh-plugin-0.15.schema.json",
+  "manifestVersion": "0.15",
+  "id": "dsh-soundcheck.local",
+  "name": "dsh-soundcheck",
+  "version": "0.7.0",
+  "license": "MIT",
+  "description": "本地音乐分析:结构 / BPM / 调性 / 动态 / 声源,把音频转成文本模型能读的证据",
+  "facets": {
+    "host": {
+      "entry": "lib/index.js",
+      "apiVersion": "v1alpha1"
+    }
+  },
+  "requires": {
+    "contracts": [
+      {
+        "apiVersion": "tools.dsh/v1alpha1",
+        "kind": "Tool"
+      }
+    ]
+  },
+  "permissions": [
+    {
+      "name": "dsh-soundcheck.process.spawn",
+      "scope": "subprocess",
+      "reason": "调用本地 Python 脚本做音频特征提取;不联网。"
+    },
+    {
+      "name": "dsh-soundcheck.fs.read",
+      "scope": "filesystem-read",
+      "reason": "读取用户指定的音频文件与其分析脚本。"
+    }
+  ],
+  "contributes": {
+    "x-display": [
+      {
+        "title": "dsh-soundcheck",
+        "description": "本地音乐分析:把音频变成结构化证据,让文本模型能回答音乐问题"
+      }
+    ]
+  }
+}

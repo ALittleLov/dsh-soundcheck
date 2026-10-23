@@ -1,0 +1,16 @@
+# Python 环境与产物
+venv/
+engine/venv/
+__pycache__/
+*.pyc
+.provisioned
+
+# 模型由 audio_provision 在首次使用时下载,不进仓库
+*.onnx
+
+# 打包产物
+build/
+*.zip
+
+# dsh-ops 运行时锁文件
+.dsh-ops-update-*.lock

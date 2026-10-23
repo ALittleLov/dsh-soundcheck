@@ -1,0 +1,17 @@
+# dsh-soundcheck 的 bundle patch —— 把音乐分析插件挂进 DSH 配置树
+#
+# DSH 启动时按 bundle 层栈把各插件的 patch 叠起来组成配置树:
+#   insert: 往配置树里加一行 entry
+#   id:     这一行的唯一标识
+#   name:   'dsh-soundcheck' 解析到本包入口 lib/index.js(宿主半侧)
+#   config: 传给 apply(root, config) 的配置
+#
+# 注意:**不要在这里写死引擎路径**。
+# 引擎默认在「插件目录/../engine」,用户装到哪都能自己找到。
+# 只有开发机上需要指回工作区时,才在 profile 的 cordis.yml 里覆盖:
+#   config:
+#     root: '<你的引擎目录>'
+
+- insert:
+    - id: audio
+      name: 'dsh-soundcheck'
