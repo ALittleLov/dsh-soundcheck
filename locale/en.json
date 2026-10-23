@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-soundcheck",
+    "description": "Local offline audio & music analysis: tempo, key, energy curve, stems, vocal sections, lyric candidates, pitch contour. Audio never leaves your machine."
+  }
+}

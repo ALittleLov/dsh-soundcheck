@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-soundcheck",
+    "description": "本机离线分析音频与音乐：BPM、调性、能量走势、分轨、人声段、歌词候选、音高轮廓。音频不出本机。"
+  }
+}
