@@ -1982,8 +1982,10 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None):
     def _has_voc(i):
         if not inst_ranges:
             return None
+        # 容差 0.5 秒：inst 区间边界有浮点误差（如 32.0001），
+        # 不加容差会把紧接边界的块误判成「无人声」，vch 也就永远触发不了。
         for r in inst_ranges:
-            if t0[i] < r["end_sec"] and t1[i] > r["start_sec"]:
+            if t0[i] < r["end_sec"] - 0.5 and t1[i] > r["start_sec"] + 0.5:
                 return False
         return True
 
@@ -2073,12 +2075,21 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None):
                 if _da is not None and _dbb is not None:
                     _d = _dbb - _da
                     if _best is None or abs(_d) > abs(_best[1]):
-                        _best = (_nm, _d)
+                        _best = (_nm, _d, _da, _dbb)
             if _best and abs(_best[1]) >= 3:
+                _bn, _bd, _b0, _b1 = _best
+                # 边界判定（2026-10-24）：从近乎无声到有声不是「音量变化」。
+                # 分轨在 -90 dBFS 附近是数值噪声，跳到 -21 会是 73 dB —— 那不是音乐事件，
+                # 是「这条轨进来了」。不区分的话，挑轨逻辑（按 |变化量| 排序）会永远优先报边界，
+                # 把真正 5-10 dB 的编曲变化挤掉。实测 6 首里 4 首犯这个错。
+                if _b0 < -60 and _b1 > -40:
+                    parts.append(f"{ZH.get(_bn, _bn)}进入")
+                elif _b0 > -40 and _b1 < -60:
+                    parts.append(f"{ZH.get(_bn, _bn)}退出")
                 # 人声刚进出时不再报「人声变响/变轻」——那是边界上的残余，会自相矛盾
-                if not (g["vch"] and _best[0] == "vocals"):
-                    parts.append(f"{ZH.get(_best[0], _best[0])}"
-                                 f"{'变响' if _best[1] > 0 else '变轻'} {abs(_best[1]):.0f} dB")
+                elif not (g["vch"] and _bn == "vocals"):
+                    parts.append(f"{ZH.get(_bn, _bn)}"
+                                 f"{'变响' if _bd > 0 else '变轻'} {abs(_bd):.0f} dB")
         tail = f"，该状态持续 {span:.0f} 秒" if span >= 32 else ""
         events.append((t0[i0], "；".join(parts) + tail,
                        abs(g["de"]) / 3.0 + abs(g["da"]) * 2 + span / 60.0))
