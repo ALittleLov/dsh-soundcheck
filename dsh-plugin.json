@@ -3,7 +3,7 @@
   "manifestVersion": "0.15",
   "id": "dsh-soundcheck.local",
   "name": "dsh-soundcheck",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "license": "MIT",
   "description": "本地音乐分析:结构 / BPM / 调性 / 动态 / 声源,把音频转成文本模型能读的证据",
   "facets": {
