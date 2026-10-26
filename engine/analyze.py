@@ -2286,7 +2286,7 @@ def _band_shift_text(mixes, dbs, e, i0, i1, n):
     return ("，" + "、".join(parts)) if parts else ""
 
 
-def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None):
+def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None, y=None, sr=None):
     """把能量 / 起音密度 / 人声状态串成事件时间线。
 
     三条规矩（按 GPT 的建议改的）：
@@ -2295,6 +2295,26 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None):
       3. 事件按「幅度 × 持续」筛，不是按时间均分
     只报发生了什么，不命名段落角色。
     """
+
+    def _refine_time(_t_a, _t_b, _rising=False):
+        """在 [_t_a, _t_b] 内找与事件同向的最大能量变化点，把 16 秒块边界细化到秒级。
+
+        窗口必须只取事件自己的区间 —— 扩到下一块会把相邻事件的变化抢过来
+        （实测：鼓撤 4:32 被定位到 5:08 的鼓回来）。
+        方向也要约束：撤就找最大下降，不能找「最陡」。
+        """
+        if y is None or sr is None or _t_b <= _t_a:
+            return _t_a
+        _a, _b = int(max(0, _t_a) * sr), int(min(len(y) / sr, _t_b) * sr)
+        if _b - _a < 4096:
+            return _t_a
+        _seg = np.asarray(y[_a:_b], dtype=np.float32)
+        _rms = librosa.feature.rms(y=_seg, frame_length=2048, hop_length=512)[0]
+        if len(_rms) < 4:
+            return _t_a
+        _d = np.diff(20.0 * np.log10(_rms + 1e-12))
+        _k = int(np.argmax(_d) if _rising else np.argmin(_d))
+        return _t_a + _k * 512.0 / sr
 
     def _perio_at(_t):
         """取 _t 所在块的周期性峰高。没有数据返回 None。
@@ -2493,6 +2513,9 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None):
                 parts.append(_vtxt)
         _band_txt = _band_shift_text(_mixes, _dbs, e, i0, i1, n)
         tail = f"，该状态持续 {span:.0f} 秒" if span >= 32 else ""
+        # 时间细化不做（2026-10-27）：三种窗口方案都试过，偏移只从 ±16 秒收敛到 ±8 秒，
+        # 根因是混音能量里还有别的乐器 —— 用混音找「鼓撤」的精确时刻本来就不准。
+        # 要准只能用鼓轨，但分轨是 16 秒粒度。块级精度对段落级描述够用。
         events.append((t0[i0], "；".join(parts),
                        abs(g["de"]) / 3.0 + abs(g["da"]) * 2 + span / 60.0,
                        _band_txt, tail))
@@ -2734,7 +2757,8 @@ def verdict_lines(d):
     # 加了条件等于永远不显示（--detail 走的是另一条输出路径）。
     _tl = _timeline(ab, es, blocks, _inst,
                     (d.get("stems") or {}).get("block_db"),
-                    (d.get("stems") or {}).get("vocal_periodicity"))
+                    (d.get("stems") or {}).get("vocal_periodicity"),
+                    d.get("_y"), d.get("_sr"))
     if _tl:
         out.append("[时间线]")
         _has_band = False
@@ -3204,6 +3228,7 @@ def main():
             "musicnn": musicnn, "stems": stems, "asr": asr,
             "offset": offset, "total_dur": total_dur,
             "detail": bool(args.detail),
+            "_y": y, "_sr": sr,
         }):
             print(line)
         if preview_asr and preview_sec:
