@@ -1867,6 +1867,11 @@ def emit_pitch(stems, y, sr):
                       f" | 有声 {_ps['voiced_ratio'] * 100:.0f}%"
                       f" | 趋势 {_ps.get('trend', '?')}"
                       f" | 最长连续 {_ps.get('longest_sec', 0):.2f} 秒")
+                # other 轨不是「一件乐器」的同义词：4-stem 里它装的是人声/鼓/贝斯之外的一切。
+                # 音域超过 2 个八度，多半是 pyin 在几条旋律线之间跳（见 X4），不是真有人唱这么宽。
+                if _nm == "other" and float(_ps.get("span") or 0) > 24:
+                    print("       ⚠ 器乐轨音域超过 2 个八度 —— other 里可能不止一件乐器，"
+                          "pyin 在几条旋律线之间跳，这个音域只能当方向，不能当「旋律跨度」。")
             else:
                 print(f"[音高] {_zh}：测不出稳定基频（{_ps.get('reason', '未知')}）")
         _vr = ((stems or {}).get("vocals") or {}).get("ratio")
@@ -1910,6 +1915,86 @@ def _cross_links(ab, es, inst_ranges, med_db):
         elif drop >= 12:
             out.append(f"{span} 没人唱，能量也塌了 {drop:.0f} dB —— 这一段是留白，不是伴奏在顶。")
     return out
+
+
+def _arousal_line(d):
+    """arousal（激烈↔平静）的粗估：只用已有测量，零新增体积。
+
+    valence（悲喜）测不了，这里不碰 —— 见任务清单第四节。
+    「激烈」是推断不是测量，所以句式固定带依据，且不写「所以很燃」这类因果；
+    中间态直接不输出，没信息的话不必占一行。
+    """
+    act = d.get("activity") or {}
+    dens = float(act.get("onset_rate_per_sec") or 0.0)
+    rms = float(d.get("rms_db") or 0.0)
+    bpm = float(d.get("tempo") or 0.0)
+    if not np.isfinite(bpm):
+        bpm = 0.0
+    score = 0
+    tags = []
+    if dens >= 2.5:
+        score += 1
+        tags.append("起音密")
+    elif 0 < dens < 1.2:
+        score -= 1
+        tags.append("起音疏")
+    if rms >= -16:
+        score += 1
+        tags.append("响度满")
+    elif rms < -20:
+        score -= 1
+        tags.append("留白多")
+    if bpm >= 130:
+        score += 1
+        tags.append("速度快")
+    elif 0 < bpm < 80:
+        score -= 1
+        tags.append("速度慢")
+    if score >= 2:
+        word = "偏激烈"
+    elif score <= -2:
+        word = "偏平静"
+    else:
+        return None
+    return f"[状态] {word}（{'、'.join(tags)}）——由节奏密度/响度/速度推得，不是听感判断"
+
+
+def _lyric_energy_link(asr, es, blocks, min_blocks=4, min_rho=0.5):
+    """歌词密度 × 能量（B3）：唱得密的段落，能量跟不跟得上。
+
+    只统计「有人唱」的块，报 Spearman 相关与样本块数。
+    相关性不是因果 —— 只说「跟着高 / 没跟上」，不说「因为唱得密所以更响」。
+    块数少时要求更强的相关：n<6 要 |rho|>=0.8，否则不报（宁可不说话）。
+    实测 ASR 可信段常常只落在少数块里（一首 5 分钟歌可能只有 4 个块），
+    所以门槛不能定得比现实高，不然这条永远不触发。
+    """
+    if not (asr and asr.get("trusted")) or es is None or not blocks:
+        return None
+    from scipy.stats import spearmanr
+
+    n = min(len(es), len(blocks))
+    if n < 3:
+        return None
+    lyr = np.zeros(n)
+    for r in asr["trusted"]:
+        for i, blk in enumerate(blocks[:n]):
+            if blk[0] < r["end_sec"] and blk[1] > r["start_sec"]:
+                lyr[i] += len(str(r.get("text", "")))
+    mask = lyr > 0
+    k = int(mask.sum())
+    if k < min_blocks:
+        return None
+    x = lyr[mask]
+    y = np.asarray(es[:n], dtype=float)[mask]
+    if float(np.std(x)) < 1e-9 or float(np.std(y)) < 1e-9:
+        return None
+    rho = float(spearmanr(x, y).correlation)
+    need = 0.8 if k < 6 else min_rho
+    if not np.isfinite(rho) or abs(rho) < need:
+        return None
+    msg = "唱得密的段落能量也高" if rho > 0 else "唱得密的段落能量反而低"
+    return (f"[关联] 歌词密度 × 能量：{msg}"
+            f"（r={rho:+.2f}，{k} 个有人唱的块）——相关，不是因果")
 
 
 def _find_hook(ab, es, blocks, inst_ranges, asr):
@@ -2349,6 +2434,10 @@ def verdict_lines(d):
         out.append(f"[SCOPE] 只分析了 {fmt_time(d['offset'])}–{fmt_time(d['offset'] + dur)}{tail}")
     out.append("[判断] " + lines[0])
     out.extend("       " + ln for ln in lines[1:])
+    # arousal 一行：由已有数字推得，中间态不输出（见 _arousal_line）
+    _ar = _arousal_line(d)
+    if _ar:
+        out.append(_ar)
     out.append("")
     if d.get("bpm_source") == "beat_this":
         bpm_txt = f"{tempo:.0f} 拍(Beat This)"
@@ -2399,6 +2488,11 @@ def verdict_lines(d):
         if _links:
             out.append("[关联] " + _links[0])
             out.extend("       " + ln for ln in _links[1:])
+
+    # B3：歌词密度 × 能量（需要 ASR；样本块数不够或相关弱时不输出）
+    _lyr = _lyric_energy_link(asr, es, blocks)
+    if _lyr:
+        out.append(_lyr)
 
     # 事件时间线：把能量 / 起音 / 人声串成先后关系
     # 不要加 d.get("detail") 条件 —— verdict_lines 只在默认路径被调用，
@@ -2454,9 +2548,21 @@ def verdict_lines(d):
     # 现在是断言—— 一旦有数字混进来就喊一声，下次改动能立刻发现回退。
     # 自检:判断正文里不许堆测量值。允许单个锚点(如「drop 9 dB」),
     # 因为一个数字能防误读;但一行里凑两个以上,就是在甩数据了。
-    _bad = [ln for ln in out
-            if (ln.startswith("[判断]") or ln.startswith("       "))
-            and len(re.findall(r"\d\s*(?:dBFS|dB|拍|倍|次/秒)", ln)) >= 2]
+    # 范围按段解析：[判断] 到下一个段标记之间才算判断正文。
+    # 不能按「以 7 个空格开头」猜 —— [时间线]/[钩子]/[分轨]/[听写] 的续行也是 7 个空格，
+    # 2026-10-26 时间线里一加 B1..B6 的 dB 就被误报成了「判断里混进测量值」。
+    _judge = []
+    _in_judge = False
+    for ln in out:
+        if ln.startswith("[判断]"):
+            _in_judge = True
+            _judge.append(ln)
+        elif _in_judge and ln.startswith("       "):
+            _judge.append(ln)
+        elif _in_judge:
+            _in_judge = False
+    _bad = [ln for ln in _judge
+            if len(re.findall(r"\d\s*(?:dBFS|dB|拍|倍|次/秒)", ln)) >= 2]
     if _bad:
         print("[自检] 判断里混进了测量值,应挪到 [依据]: " + _bad[0].strip()[:60],
               file=sys.stderr)
