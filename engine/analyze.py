@@ -1531,7 +1531,18 @@ def analyze_lyrics(path, *, model="base", cache_dir=None):
         print(f"[听写] 加载 Whisper {model}(首次会下载模型)...", file=sys.stderr)
         wm = WhisperModel(target, device="cpu", compute_type="int8",
                           download_root=_model_root)
-        segs, info = wm.transcribe(mono, language="zh", beam_size=5,
+        # 先探测语言，再决定用哪种语言解码。两条都要，缺一不可：
+        #   1) 不能写死 language="zh" —— 蒙古语/俄语/韩语会被硬拼成汉字，整批判成幻觉
+        #      （2026-10-26 实测三首全部 0 段可信）。
+        #   2) 也不能直接 language=None —— 实测同一首中文歌，全自动检测会把可信段从 23 降到 13
+        #      （检测流程改变了中文的解码路径）。中文歌本来就不需要探测，就别让它走那条路。
+        try:
+            _lang, _lprob, _ = wm.detect_language(mono)
+        except Exception:  # noqa: BLE001
+            _lang, _lprob = "zh", 1.0
+        _decode_lang = (_lang if (_lang not in ("zh", "en") and _lprob >= 0.5)
+                        else "zh")
+        segs, info = wm.transcribe(mono, language=_decode_lang, beam_size=5,
                                    vad_filter=False,
                                    condition_on_previous_text=False,
                                    repetition_penalty=1.15,
@@ -1581,6 +1592,10 @@ def analyze_lyrics(path, *, model="base", cache_dir=None):
         "trusted_ratio": round(trusted_dur / total, 2),
         "vocals_dbfs": round(v_db, 1),
         "elapsed_sec": round(_time.time() - t0, 1),
+        # 自动检测到的语言：非中文时输出层要说明，否则会被当成「中文听错了」
+        "language": _lang,
+        "language_prob": round(float(_lprob), 2),
+        "decoded_as": _decode_lang,
     }
     _draft_rows = [r for r in rows if r["label"] == "存疑" and r["text"]]
     stats["instrumental"] = len(inst_ranges)
@@ -2518,6 +2533,9 @@ def verdict_lines(d):
         out.extend("       " + ln for ln in _hook[1:])
     if asr and asr.get("available"):
         st = asr.get("stats") or {}
+        # 解码用的语言：非中文要说出来，否则「听不出」会被误读成「中文没听清」
+        _dec = str(st.get("decoded_as") or "zh").strip()
+        _lang_txt = ("（按 " + _dec + " 听写）" if _dec and _dec != "zh" else "")
         if st.get("note"):
             out.append(f"[听写] {st['note']}")
         elif not asr.get("trusted"):
@@ -2525,14 +2543,14 @@ def verdict_lines(d):
             _n_draft = int(st.get("draft_withheld", 0))
             _n_hall = int(st.get("hallucination", 0))
             if _n_draft or _n_hall:
-                out.append(f"[听写] 已执行听写，但没有任何一段通过可信度筛选"
+                out.append(f"[听写] 已执行听写{_lang_txt}，但没有任何一段通过可信度筛选"
                            f"（{_n_draft} 段存疑、{_n_hall} 段疑幻觉，正文不提供）—— "
                            "不把未验证的文字当歌词用")
             else:
-                out.append("[听写] 已执行听写，没有可用的歌词段"
+                out.append(f"[听写] 已执行听写{_lang_txt}，没有可用的歌词段"
                            "(可能是外语/吟唱，也可能是模型在编)；别因此当成纯器乐")
         else:
-            out.append(f"[听写] 机器听写候选(可能有错),较确定"
+            out.append(f"[听写] 机器听写候选{_lang_txt}(可能有错),较确定"
                        f" {len(asr['trusted'])}/{st.get('segments', '?')} 段:")
             for r in asr["trusted"][:12]:
                 out.append(f"       {fmt_time(r['start_sec'])} {r['text']}")
