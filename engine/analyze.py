@@ -640,6 +640,19 @@ BANDS_DEFAULT = [
     ("6000-12000", 6000, 12000),
 ]
 
+# 事件时间线用的 6 个频段(Hz)。文本里只写 B1–B6,Hz 映射写在工具说明里 ——
+# 不写「超低/低频」这类词,是因为它们有约定俗成的乐器联想,
+# 而这里测的是频谱分布,不是「谁在演奏」。
+_ACT_BAND_EDGES = [(30, 120), (120, 300), (300, 800), (800, 2000),
+                   (2000, 5000), (5000, 12000)]
+_BAND_IDS = [f"B{i + 1}" for i in range(len(_ACT_BAND_EDGES))]
+_BAND_SHIFT_PP = 12.0     # 占比变化门槛(百分点);按事件前后窗口统计后定的,不是拍脑袋
+# 门控用「相对本曲电平」而不是固定 dBFS:同一段音频整体调低 10 dB 后,
+# 固定门槛会把整首挡掉,判断就随音量变了。相对门控与增益无关。
+_BAND_GATE_BELOW_DB = 25.0   # 低于本曲块能量中位数这么多,占比只剩残余,不可信
+_BAND_GATE_FLOOR_DB = -70.0  # 绝对底线:再低就是静音,没有可测的频谱分布
+_BAND_MAX_PER_TRACK = 3   # 每首最多几条事件带频段说明(控输出长度)
+
 
 def analyze_bands(y, sr, bands=None):
     """分频段统计打击层:每段的能量占比、打击密度、间隔规律性(cv)、主周期。
@@ -733,7 +746,7 @@ def activity_timeline(y, sr, block_sec=16.0, hop=1024):
 
     # 3) 活跃频带占比(6 个倍频程带)
     freqs = librosa.fft_frequencies(sr=sr)
-    band_edges = [(30, 120), (120, 300), (300, 800), (800, 2000), (2000, 5000), (5000, 12000)]
+    band_edges = _ACT_BAND_EDGES
     band_energy = []
     for lo, hi in band_edges:
         m = (freqs >= lo) & (freqs < hi)
@@ -763,18 +776,35 @@ def activity_timeline(y, sr, block_sec=16.0, hop=1024):
         n_on = int(np.sum((onsets >= lo_f) & (onsets < hi_f)))
         seg_flux = float(np.mean(np.sqrt(np.sum(np.diff(seg, axis=1) ** 2, axis=0))))
         # 本块的频带占比
+        # seg_e 用幅度均值算「活跃频带」——保持 0.8.x 的口径不动，免得改变既有判断；
+        # seg_p 用能量平方和算占比（band_mix）——回答「哪个频段让位/顶上」用这个，
+        # 它与整体增益解耦：响度整体上抬不会让占比变形。
         seg_e = []
+        seg_p = []
         for lo, hi in band_edges:
             m = (freqs >= lo) & (freqs < hi)
-            seg_e.append(float(S[m, i:i + per].mean()) if m.any() else 0.0)
+            if not m.any():
+                seg_e.append(0.0)
+                seg_p.append(0.0)
+                continue
+            _sub = S[m, i:i + per]
+            seg_e.append(float(_sub.mean()))
+            seg_p.append(float(np.sum(_sub ** 2)))
         se = np.array(seg_e)
+        sp = np.array(seg_p)
         ratio = float((se > se.max() * 0.1).mean()) if se.max() > 0 else 0.0
+        _tot = float(sp.sum())
+        _mix = [round(float(x / _tot), 4) for x in sp] if _tot > 0 else [0.0] * len(sp)
         blocks.append({
             "start_sec": round(lo_f * hop / sr, 1),
             "end_sec": round(hi_f * hop / sr, 1),
             "onsets": n_on,
             "active_band_ratio": round(ratio, 2),
             "spectral_flux": round(seg_flux, 4),
+            "band_mix": _mix,
+            # 每段绝对能量(dB,相对全刻度)。占比和绝对量是两件事:
+            # 占比只能说明分布往哪偏,绝对量才能说明「这一层是不是真的塌了」。
+            "band_db": [round(float(10 * np.log10(x + 1e-12)), 1) for x in sp],
         })
 
     return summary, blocks
@@ -1963,6 +1993,44 @@ def _find_hook(ab, es, blocks, inst_ranges, asr):
     return lines
 
 
+def _band_shift_text(mixes, dbs, e, i0, i1, n):
+    """事件前后的频段变化，写成 `B1 -9dB/-43pp`。
+
+    两个数各有各的用：
+      dB —— 该频段**绝对能量**变化，回答「这一层是不是真的塌了」
+      pp —— 该频段在混音里的占比变化（百分点），回答「分布往哪偏」
+    占比下跌但绝对能量上涨是常见情形（别的层涨得更快），所以两个都给，
+    让读文本的模型自己分辨「实际下降」和「相对下降」。
+    """
+    if mixes is None or dbs is None:
+        return ""
+    p0, p1 = max(0, i0 - 2), i0
+    q0, q1 = i1 + 1, min(n, i1 + 3)
+    if q1 <= q0:
+        # 曲尾事件：没有「之后」的块，退化成事件末块，否则最后一次切换会被整条漏掉
+        q0, q1 = i1, i1 + 1
+    if p1 <= p0 or q1 <= q0:
+        return ""
+    # 门控用相对本曲电平：整体调低音量后中位数跟着降，判断不变。
+    _gate = max(_BAND_GATE_FLOOR_DB,
+                float(np.median(e)) - _BAND_GATE_BELOW_DB)
+    if (float(np.mean(e[p0:p1])) < _gate
+            or float(np.mean(e[q0:q1])) < _gate):
+        return ""
+    dpp = (mixes[q0:q1].mean(axis=0) - mixes[p0:p1].mean(axis=0)) * 100.0
+    # dB 先回线性再平均：直接平均 dB 会把弱频段算重（-100 和 -20 的平均不是 -60）
+    _pre = 10 ** (dbs[p0:p1].mean(axis=0) / 10.0)
+    _post = 10 ** (dbs[q0:q1].mean(axis=0) / 10.0)
+    ddb = 10.0 * np.log10((_post + 1e-12) / (_pre + 1e-12))
+    dn, up = int(np.argmin(dpp)), int(np.argmax(dpp))
+    parts = []
+    if dpp[dn] <= -_BAND_SHIFT_PP:
+        parts.append(f"{_BAND_IDS[dn]} {ddb[dn]:+.0f}dB/{dpp[dn]:+.0f}pp")
+    if dpp[up] >= _BAND_SHIFT_PP:
+        parts.append(f"{_BAND_IDS[up]} {ddb[up]:+.0f}dB/{dpp[up]:+.0f}pp")
+    return ("，" + "、".join(parts)) if parts else ""
+
+
 def _timeline(ab, es, blocks, inst_ranges, block_db=None):
     """把能量 / 起音密度 / 人声状态串成事件时间线。
 
@@ -1996,6 +2064,19 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None):
                 if a.get("start_sec", 0) < t1[i] and a.get("end_sec", 0) > t0[i]]
         if vals:
             act[i] = float(np.mean(vals))
+
+    # 逐块频段数据：占比(mix)回答「分布往哪偏」，绝对能量(db)回答「这层是不是真塌了」。
+    # 两者缺一不可——占比下跌时绝对能量仍可能上升（别的层涨得更快）。
+    # 缺字段就当没有（旧缓存 / 旧 JSON），不影响其他判断。
+    _mixes = _dbs = None
+    if ab:
+        _ms = [b.get("band_mix") for b in ab[:n]]
+        _bs = [b.get("band_db") for b in ab[:n]]
+        if (len(_ms) == n and len(_bs) == n
+                and all(isinstance(x, (list, tuple)) and len(x) == 6 for x in _ms)
+                and all(isinstance(x, (list, tuple)) and len(x) == 6 for x in _bs)):
+            _mixes = np.asarray(_ms, dtype=float)
+            _dbs = np.asarray(_bs, dtype=float)
 
     # ---- 第一层：找变化候选 ----
     cand = []
@@ -2090,9 +2171,11 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None):
                 elif not (g["vch"] and _bn == "vocals"):
                     parts.append(f"{ZH.get(_bn, _bn)}"
                                  f"{'变响' if _bd > 0 else '变轻'} {abs(_bd):.0f} dB")
+        _band_txt = _band_shift_text(_mixes, _dbs, e, i0, i1, n)
         tail = f"，该状态持续 {span:.0f} 秒" if span >= 32 else ""
-        events.append((t0[i0], "；".join(parts) + tail,
-                       abs(g["de"]) / 3.0 + abs(g["da"]) * 2 + span / 60.0))
+        events.append((t0[i0], "；".join(parts),
+                       abs(g["de"]) / 3.0 + abs(g["da"]) * 2 + span / 60.0,
+                       _band_txt, tail))
 
     # 开头状态
     head = []
@@ -2103,12 +2186,20 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None):
     if not np.isnan(act[0]) and act[0] <= float(np.nanpercentile(act, 25)):
         head.append("起音稀疏")
     if head:
-        events.insert(0, (0.0, "开场：" + "、".join(head), 1.0))
+        events.insert(0, (0.0, "开场：" + "、".join(head), 1.0, "", ""))
 
     # 按重要性筛（不是按时间均分），最多 8 条
     events.sort(key=lambda x: -x[2])
     keep = sorted(events[:8], key=lambda x: x[0])
-    return [(ts, txt) for ts, txt, _ in keep]
+    # 频段说明只给最重要的几条带频段的：全带会把输出撑长，多出来的多半是边缘变化
+    _allow = set()
+    for _k in sorted(range(len(keep)), key=lambda k: -keep[k][2]):
+        if keep[_k][3]:
+            _allow.add(_k)
+        if len(_allow) >= _BAND_MAX_PER_TRACK:
+            break
+    return [(ts, txt + (band if k in _allow else "") + tail)
+            for k, (ts, txt, _score, band, tail) in enumerate(keep)]
 
 
 def verdict_lines(d):
@@ -2316,8 +2407,15 @@ def verdict_lines(d):
                     (d.get("stems") or {}).get("block_db"))
     if _tl:
         out.append("[时间线]")
+        _has_band = False
         for _ts, _txt in _tl:
+            if any(k in _txt for k in ("B1", "B2", "B3", "B4", "B5", "B6")):
+                _has_band = True
             out.append(f"       {fmt_time(_ts)}  {_txt}")
+        if _has_band:
+            # 频段编号必须就地给映射,否则模型会把 B1 猜成某种乐器
+            out.append("       频段 B1–B6=30–120/120–300/300–800/800–2000/2000–5000/"
+                       "5000–12000Hz;dB=该段绝对能量变化,pp=占混音比例变化(百分点)")
 
     # 钩子检测：能量 / 起音 /（有歌词时）字数，几项同时到峰值的位置
     _hook = _find_hook(ab, es, blocks, _inst, asr)
