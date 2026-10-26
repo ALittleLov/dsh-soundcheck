@@ -2384,6 +2384,9 @@ def main():
                     help="分轨分析(可选组件):4s=人声/鼓/贝斯/其他,6s=再加吉他/钢琴")
     ap.add_argument("--asr", nargs="?", const="base", choices=["tiny", "base", "small"],
                     help="歌词听写(可选组件):4s 分轨取人声 + faster-whisper;只输出可信段")
+    ap.add_argument("--preview-asr", nargs="?", const="tiny",
+                    choices=["tiny", "base", "small"],
+                    help="预览时顺带听写一句(分离选中片段+Whisper tiny,约 +17 秒);不给则预览只出测量(约 8 秒)")
     ap.add_argument("--preview", nargs="?", const=-1.0, type=float,
                     help="快速预览:自动选「又响又密」的段落(数据驱动);给数字则强制该秒数")
     ap.add_argument("--bands", action="store_true",
@@ -2403,6 +2406,9 @@ def main():
     preview_sec = None
     preview_how = ""
     preview_asr = None
+    if args.preview_asr and args.preview is None:
+        print("[预览] --preview-asr 只在 --preview 下生效,已忽略", file=sys.stderr)
+        args.preview_asr = None
     if args.preview is not None and args.end is None:
         try:
             _y, _sr = librosa.load(args.path, sr=None, mono=True)
@@ -2422,9 +2428,9 @@ def main():
             duration = 30.0
             preview_sec = duration
             preview_how = "回退:30 秒"
-        preview_asr = "tiny"   # 预览默认带一段快速听写,证明「听到了」
+        preview_asr = args.preview_asr   # 默认 None(只出测量);显式 --preview-asr 才带听写
         if args.stems or args.asr:
-            print("[预览] 模式忽略 --stems/--asr(那两项要 1-2 分钟,预览要快)",
+            print("[预览] 忽略 --stems/--asr(分轨与整曲听写各要 1-2 分钟);想要预览带一句听写用 --preview-asr",
                   file=sys.stderr)
             args.stems = None
             args.asr = None

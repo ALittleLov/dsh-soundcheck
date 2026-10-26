@@ -56,7 +56,7 @@ dsh plugin add ALittleLov/dsh-soundcheck
 
 | 工具 | 作用 | 参数 |
 |---|---|---|
-| `audio_analyze` | 分析整首音频 | `path` `format` `brief` `detail` `blocks` `stems` `preview` `asr` `async` |
+| `audio_analyze` | 分析整首音频 | `path` `format` `brief` `detail` `blocks` `stems` `preview` `preview_asr` `asr` `async` |
 | `audio_section` | 只分析一段 | `path` `start` `end` `format` `brief` `detail` `blocks` |
 | `audio_bands` | 分频段诊断 | `path` `start` `end` |
 | `audio_provision` | 装引擎 | `stems` `asr` |
@@ -70,7 +70,8 @@ dsh plugin add ALittleLov/dsh-soundcheck
 | `detail: true` | 输出完整测量明细 |
 | `stems: 4s \| 6s` | 分轨（可选组件，首次 60–90 秒，之后读缓存） |
 | `asr: tiny \| base \| small` | 歌词听写（可选组件，默认关闭） |
-| `preview: true` | 快速预览，6–40 秒出结果，不跑分轨 / ASR |
+| `preview: true` | 快速预览，6–40 秒选段，约 8 秒；不跑分轨 / ASR |
+| `preview_asr: tiny \| base \| small` | 仅配合 `preview`：对选中片段听写一句，约 +17 秒 |
 | `async: true` | 后台任务，立即返回 job id（分轨 / 听写建议开） |
 
 `audio_bands` 是分频段诊断：把频谱切 5 段（30–250 / 250–800 / 800–2500 / 2500–6000 / 6000–12000 Hz），
@@ -113,7 +114,7 @@ python analyze.py "<音频路径>" --start 1:30 --end 2:10
 python analyze.py "<音频路径>" --stems 6s
 python analyze.py "<音频路径>" --asr base
 python analyze.py "<音频路径>" --pitch
-python analyze.py "<音频路径>" --preview
+python analyze.py "<音频路径>" --preview --preview-asr tiny
 ```
 
 ## 输出长什么样
