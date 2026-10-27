@@ -2286,7 +2286,8 @@ def _band_shift_text(mixes, dbs, e, i0, i1, n):
     return ("，" + "、".join(parts)) if parts else ""
 
 
-def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None, y=None, sr=None):
+def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
+              y=None, sr=None, vocal_ratio=None):
     """把能量 / 起音密度 / 人声状态串成事件时间线。
 
     三条规矩（按 GPT 的建议改的）：
@@ -2295,6 +2296,12 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None, y=No
       3. 事件按「幅度 × 持续」筛，不是按时间均分
     只报发生了什么，不命名段落角色。
     """
+
+    # 整曲人声占比低于 10% 时，任何「人声 X」都不说 —— 钢琴泛音、混响、观众
+    # 都会被 demucs 分进 vocals 轨，逐块特征分不出「有基频的乐器」和「人声」。
+    # 实测：纯钢琴 4.3%、民乐 0.05%（误报人声），说唱 16%、现场摇滚 28%（真有人声）。
+    _has_vocals = vocal_ratio is None or float(vocal_ratio) >= 0.10
+    _VNAME = "人声" if _has_vocals else "vocals 轨"
 
     def _refine_time(_t_a, _t_b, _rising=False):
         """在 [_t_a, _t_b] 内找与事件同向的最大能量变化点，把 16 秒块边界细化到秒级。
@@ -2473,9 +2480,9 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None, y=No
             if any(c[0] == "vocals" for c in _ins) and _pk is not None and _pk < 0.30:
                 _act = "有声音进来，但没有稳定基频（可能是欢呼/噪声）"
             else:
-                _act = f"编曲重新铺开：{_nm_of(_ins)}回来"
+                _act = f"编曲重新铺开：{_nm_of(_ins).replace('人声', _VNAME)}回来"
         elif _outs and _e_dn:
-            _act = f"编曲收掉：{_nm_of(_outs)}撤了"
+            _act = f"编曲收掉：{_nm_of(_outs).replace('人声', _VNAME)}撤了"
         elif _ins or _outs:
             _act = f"编配换了、响度没大动：{_nm_of(_ins + _outs)}"
         elif _e_up and _da_up:
@@ -2500,7 +2507,7 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None, y=No
             parts.append("、".join(
                 f"{ZH.get(c[0], c[0])}{c[1]} {c[2]:.0f} dB" for c in _louds[:2]))
         if g["vch"] and not _act.startswith("换人声"):
-            _vtxt = "人声进入" if voc[i0] else "人声退出"
+            _vtxt = (f"{_VNAME}进入" if voc[i0] else f"{_VNAME}退出")
             # 观众欢呼也会被分进 vocals 轨 —— 用自相关峰高区分：
             # 没有稳定基频就不是人声。阈值 0.30 来自一首现场版实测
             # （欢呼 0.136 / 主唱 0.61），样本少，是工程起点不是定律。
@@ -2508,6 +2515,9 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None, y=No
             if _pk is not None and _pk < 0.30:
                 _vtxt = ("vocals 轨响起来了，但没有稳定基频（可能是欢呼/噪声）"
                          if voc[i0] else "vocals 轨静下去了")
+            elif not _has_vocals:
+                _vtxt = (f"vocals 轨有信号，但整曲人声只占 {float(vocal_ratio)*100:.1f}%"
+                         f"（更像乐器泄漏）" if voc[i0] else "vocals 轨静下去了")
             # 主句已经说过「没有稳定基频」就不再重复
             if "没有稳定基频" not in _act and _vtxt not in _act:
                 parts.append(_vtxt)
@@ -2758,7 +2768,8 @@ def verdict_lines(d):
     _tl = _timeline(ab, es, blocks, _inst,
                     (d.get("stems") or {}).get("block_db"),
                     (d.get("stems") or {}).get("vocal_periodicity"),
-                    d.get("_y"), d.get("_sr"))
+                    d.get("_y"), d.get("_sr"),
+                    ((d.get("stems") or {}).get("vocals") or {}).get("ratio"))
     if _tl:
         out.append("[时间线]")
         _has_band = False
