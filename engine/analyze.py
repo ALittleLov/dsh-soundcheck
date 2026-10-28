@@ -30,7 +30,7 @@ import numpy as np
 import librosa
 from scipy.signal import butter, sosfiltfilt
 
-# YAMNet 是可选增强:模型/运行时不在就跳过,不影响主体分析
+# 声源模型是可选增强:模型/运行时不在就跳过,不影响主体分析
 try:
     import onnxruntime as ort
 except Exception:
@@ -45,7 +45,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 YAMNET_MODEL = os.path.join(HERE, "yamnet.onnx")
 YAMNET_CLASSES = os.path.join(HERE, "yamnet_class_map.csv")
 MUSICNN_MODEL = os.path.join(HERE, "musicnn.onnx")
-# MusicNN(MTT) 的 50 个标签 —— 训练集是西方音乐,不含中国民乐
+# 标签模型的 50 个标签 —— 训练集是西方音乐,不含中国民乐
 MUSICNN_LABELS = [
     "guitar", "classical", "slow", "techno", "strings", "drums", "electronic", "rock",
     "fast", "piano", "ambient", "beat", "violin", "vocal", "synth", "female", "indian",
@@ -188,7 +188,7 @@ def key_ambiguity(best_name, top3, gap):
 
 
 def _beatthis_model_dir():
-    """Beat This 模型目录(用户数据区)。模型缺失时返回 None。"""
+    """节拍模型目录(用户数据区)。模型缺失时返回 None。"""
     _data = os.environ.get("DSH_AUDIO_DATA_DIR")
     root = (os.path.join(_data, "models", "beat_this") if _data
             else os.path.join(HERE, "dsh-soundcheck-data", "models", "beat_this"))
@@ -196,7 +196,7 @@ def _beatthis_model_dir():
 
 
 def detect_tempo_beatthis(y, sr):
-    """Beat This ONNX 检测拍点(可选组件)。返回 (bpm, beat_times) 或 None。
+    """节拍 ONNX 检测拍点(可选组件)。返回 (bpm, beat_times) 或 None。
 
     输入规格来自 frontend.json: 22050Hz / n_fft 1024 / hop 441 / 128 mel。
     整首按 30 秒分块 —— Transformer 的 attention 对长序列会吃掉大量内存。
@@ -244,7 +244,7 @@ def detect_tempo_beatthis(y, sr):
 
 
 def detect_tempo(y, sr):
-    """检测拍速。有 Beat This 模型就用它,否则回退 librosa。
+    """检测拍速。有节拍模型就用它,否则回退 librosa。
 
     返回 (tempo, tempo_alt, beat_times, kick_bpm, source)。
     """
@@ -481,7 +481,7 @@ def assess_fit(chroma, beat_times, key_gap, key_r, chord_mean_gap):
 
 def analyze_sources(y, sr, top_k=8):
     """
-    YAMNet 声源/乐器分类(可选增强)。
+    声源/乐器分类(可选增强)。
 
     返回 None = 不可用(onnxruntime 或模型文件缺失),调用方应静默跳过。
     y/sr 由调用方加载后传入 —— 以前这里自己再解码一次文件,等于把
@@ -590,7 +590,7 @@ def analyze_sources(y, sr, top_k=8):
 
 def analyze_musicnn(y, sr, min_score=0.15, top_k=3):
     """
-    MusicNN(MTT 50 类) 音乐标签 —— 可选增强,模型缺失时返回 None。
+    标签模型(50 类) 音乐标签 —— 可选增强,模型缺失时返回 None。
 
     ⚠ 这是『模型打的标签』,不是『识别结果』:
       - 训练集是西方音乐,标签里没有马头琴/古筝/唢呐
@@ -627,7 +627,7 @@ def analyze_musicnn(y, sr, min_score=0.15, top_k=3):
     return {
         "available": True,
         "tags": tags,
-        "caveat": "MTT 50 类训练集为西方音乐,不含中国民乐;标签可能明显错误",
+        "caveat": "标签集训练集为西方音乐,不含中国民乐;标签可能明显错误",
     }
 
 
@@ -1099,7 +1099,8 @@ def analyze_stems(path, mix_rms_db, *, model="htdemucs", cache_dir=None, want_pi
     # 教训 2026-10-23：把字段名从 longest_run 改成 longest_sec 后，缓存没版本号，
     # 旧 json 里读不到新字段，于是全曲显示「最长连续 0.00 秒」——误以为是算法坏了，
     # 查到最后是缓存。凡是往缓存里加/改字段，都要动这个数字。
-    raw_key = (f"{os.path.abspath(path)}|{st.st_size}|{int(st.st_mtime)}|{model}|v8")
+    # v9（2026-10-26）：加了 vocal_activity（B3 的 X），旧缓存里没这个字段。
+    raw_key = (f"{os.path.abspath(path)}|{st.st_size}|{int(st.st_mtime)}|{model}|v11")
     key = hashlib.sha1(raw_key.encode("utf-8")).hexdigest()[:16]
     cpath = os.path.join(root, f"{key}.json")
     if os.path.exists(cpath):
@@ -1208,6 +1209,16 @@ def analyze_stems(path, mix_rms_db, *, model="htdemucs", cache_dir=None, want_pi
             out["instrumental"] = []
             out["instrumental_error"] = f"{type(e).__name__}: {e}"
 
+    # 人声发音活动事件（B3 的 X）。只能在分轨之后算：要先知道哪些是人声。
+    if vw is not None:
+        try:
+            from demucs_onnx.inference import SAMPLE_RATE as _SR5
+            out["vocal_activity"] = _vocal_activity_blocks(vw, _SR5)
+            out["vocal_tone"] = _vocal_tone_blocks(vw, _SR5)
+            out["vocal_periodicity"] = _vocal_periodicity_blocks(vw, _SR5)
+        except Exception as e:  # noqa: BLE001
+            out["vocal_activity_error"] = f"{type(e).__name__}: {e}"
+
     # 相对电平(逐 2 秒窗口,0.5 秒步进): 人声轨比混音低多少 dB。
     # 窗口必须短 —— 2 秒的人声切片放进 16 秒窗口会被稀释约 9 dB，直接压到阈值以下。
     # 混音太安静的窗口跳过：安静段会让相对电平虚高，测的不是人声。
@@ -1307,6 +1318,134 @@ def analyze_stems(path, mix_rms_db, *, model="htdemucs", cache_dir=None, want_pi
             json.dump(out, fh, ensure_ascii=False)
     except Exception:
         pass
+    return out
+
+
+def _vocal_activity_blocks(y, sr, block_sec=16.0):
+    """人声轨的「发音活动事件」逐块计数（B3 的 X）。
+
+    这不是音节计数。它数的是「人声轨里出现了一次可检测的发声/发音变化」，
+    由两路线索合并：短时能量的上升沿、频谱变化率的峰。
+    拖长音会少算，辅音/换气会多算 —— 所以只能当「唱得密不密」的代理，不能当字数。
+    """
+    hop = 512
+    a = np.asarray(y, dtype=np.float64)
+    if a.ndim == 2:
+        a = a.mean(axis=0) if a.shape[0] <= a.shape[1] else a.mean(axis=1)
+    a = a.reshape(-1).astype(np.float32)
+    if len(a) < sr:
+        return []
+    S = np.abs(librosa.stft(a, hop_length=hop))
+    fps = sr / hop
+    # 线索一：能量包络的上升沿（去掉慢变化，只留局部上升）
+    rms = librosa.feature.rms(S=S, frame_length=2048, hop_length=hop)[0]
+    _slow = np.convolve(rms, np.ones(9) / 9.0, mode="same")
+    rise = rms - _slow
+    _thr_e = max(1e-5, 0.15 * float(np.max(rise)) if np.max(rise) > 0 else 1e-5)
+    ev_e = np.where((rise > _thr_e) & (rise > np.roll(rise, 1)))[0]
+    # 线索二：频谱变化率的峰
+    flux = np.sqrt(np.sum(np.diff(S, axis=1) ** 2, axis=0))
+    flux = np.concatenate([[0.0], flux])
+    _p99 = float(np.percentile(flux, 99)) if len(flux) else 0.0
+    _thr_f = max(1e-7, 0.20 * _p99)
+    ev_f = np.where((flux > _thr_f) & (flux > np.roll(flux, 1)))[0]
+    # 合并：0.1 秒内的重复事件算一次
+    _gap = max(1, int(0.1 * fps))
+    ev = np.unique(np.concatenate([ev_e, ev_f])) if (len(ev_e) or len(ev_f)) else np.array([], dtype=int)
+    if len(ev) > 1:
+        keep = [int(ev[0])]
+        for t in ev[1:]:
+            if int(t) - keep[-1] >= _gap:
+                keep.append(int(t))
+        ev = np.array(keep)
+    per = max(1, int(block_sec * fps))
+    out = []
+    for i in range(0, S.shape[1], per):
+        lo, hi = i, min(i + per, S.shape[1])
+        n = int(np.sum((ev >= lo) & (ev < hi)))
+        out.append({"start_sec": round(lo / fps, 1),
+                    "end_sec": round(hi / fps, 1),
+                    "events": n})
+    return out
+
+
+def _vocal_tone_blocks(y, sr, block_sec=16.0):
+    """人声轨每块的「像不像人在唱」两项指标。
+
+    只看 dB 分不清「人声」和「观众欢呼」——现场录音里 demucs 会把欢呼分进 vocals。
+    有调性的声音频谱平坦度低、过零率低；欢呼/噪声两者都高。
+    这里只报每块的 flat（谱平坦度）与 zcr（过零率），判定交给调用方 —— 阈值按实测定。
+    """
+    hop = 512
+    a = np.asarray(y, dtype=np.float64)
+    if a.ndim == 2:
+        a = a.mean(axis=0) if a.shape[0] <= a.shape[1] else a.mean(axis=1)
+    a = a.reshape(-1).astype(np.float32)
+    if len(a) < sr:
+        return []
+    S = np.abs(librosa.stft(a, n_fft=2048, hop_length=hop))
+    flat = librosa.feature.spectral_flatness(S=S)[0]
+    zcr = librosa.feature.zero_crossing_rate(a, frame_length=2048, hop_length=hop)[0]
+    fps = sr / hop
+    per = max(1, int(block_sec * fps))
+    out = []
+    for i in range(0, S.shape[1], per):
+        lo, hi = i, min(i + per, S.shape[1])
+        if hi - lo < per // 2:
+            continue
+        out.append({"start_sec": round(lo / fps, 1),
+                    "end_sec": round(hi / fps, 1),
+                    "flat": round(float(np.mean(flat[lo:hi])), 5),
+                    "zcr": round(float(np.mean(zcr[lo:hi])), 4)})
+    return out
+
+
+def _vocal_periodicity_blocks(y, sr, block_sec=16.0):
+    """人声轨每块的「周期性」——用自相关峰高判断有没有稳定基频。
+
+    人声有基频与谐波列，自相关在基音周期处有明显峰；观众欢呼是噪声，除 lag 0 外塌得很快。
+    比谱平坦度更本质（实测平坦度在这条轨上方向反了）。
+    只报每块归一化峰高与对应基频，不做判定 —— 阈值要按实测定。
+    """
+    a = np.asarray(y, dtype=np.float64)
+    if a.ndim == 2:
+        a = a.mean(axis=0) if a.shape[0] <= a.shape[1] else a.mean(axis=1)
+    a = a.reshape(-1).astype(np.float32)
+    if len(a) < sr:
+        return []
+    # 基频搜索范围 70–800 Hz → lag 样本数
+    lo_lag, hi_lag = max(2, int(sr / 800.0)), int(sr / 70.0)
+    per = int(block_sec * sr)
+    out = []
+    for st in range(0, len(a) - per // 2, per):
+        seg = a[st:st + per]
+        if len(seg) < per // 2:
+            continue
+        seg = seg - float(np.mean(seg))          # 去直流，否则自相关被常值主导
+        if float(np.max(np.abs(seg))) < 1e-6:
+            out.append({"start_sec": round(st / sr, 1),
+                        "end_sec": round((st + len(seg)) / sr, 1),
+                        "peak": 0.0, "f0": None})
+            continue
+        # FFT 自相关（比 np.correlate 快一个量级）
+        n = 1
+        while n < 2 * len(seg):
+            n *= 2
+        S = np.fft.rfft(seg, n=n)
+        ac = np.fft.irfft(S * np.conj(S), n=n)[:len(seg)]
+        ac0 = ac[0] if abs(ac[0]) > 1e-12 else 1e-12
+        ac = ac / ac0
+        hi_lag = min(hi_lag, len(ac) - 1)
+        band = ac[lo_lag:hi_lag + 1]
+        if len(band) == 0:
+            peak, f0 = 0.0, None
+        else:
+            k = int(np.argmax(band))
+            peak = float(band[k])
+            f0 = round(sr / (lo_lag + k), 1) if peak > 0.1 else None
+        out.append({"start_sec": round(st / sr, 1),
+                    "end_sec": round((st + len(seg)) / sr, 1),
+                    "peak": round(peak, 4), "f0": f0})
     return out
 
 
@@ -1974,42 +2113,58 @@ def _arousal_line(d):
     return f"[状态] {word}（{'、'.join(tags)}）——由节奏密度/响度/速度推得，不是听感判断"
 
 
-def _lyric_energy_link(asr, es, blocks, min_blocks=4, min_rho=0.5):
-    """歌词密度 × 能量（B3）：唱得密的段落，能量跟不跟得上。
+def _vocal_activity_link(stems, min_blocks=8):
+    """B3：唱得越密，伴奏是不是也越满。（不依赖 ASR）
 
-    只统计「有人唱」的块，报 Spearman 相关与样本块数。
-    相关性不是因果 —— 只说「跟着高 / 没跟上」，不说「因为唱得密所以更响」。
-    块数少时要求更强的相关：n<6 要 |rho|>=0.8，否则不报（宁可不说话）。
-    实测 ASR 可信段常常只落在少数块里（一首 5 分钟歌可能只有 4 个块），
-    所以门槛不能定得比现实高，不然这条永远不触发。
+    X = 人声轨的发音活动事件数（代理，不是音节数，见 _vocal_activity_blocks）
+    Y = 伴奏能量（drums+bass+other 合成），**不是整曲** ——
+        整曲含人声，人声一强整体就高，哪怕伴奏没动，那是自证。
+    三态：数据不足 / 关系不明确 / 发现关系。只有「发现关系」返回文本，
+    另两态沉默 —— 沉默不等于「没关系」，但没测出来就不该让人去猜。
+    门槛：8 块起；8–9 块要 |rho|>=0.8 且标「初步」；10+ 用 0.7；
+    再加一条稳定性检查：剔除贡献最大的块后方向不能变。
     """
-    if not (asr and asr.get("trusted")) or es is None or not blocks:
+    if not stems or not stems.get("available"):
+        return None
+    act = stems.get("vocal_activity") or []
+    blk = stems.get("block_db") or {}
+    parts = [blk.get(n) for n in ("drums", "bass", "other")]
+    if not act or not all(parts):
         return None
     from scipy.stats import spearmanr
 
-    n = min(len(es), len(blocks))
+    n = min([len(act)] + [len(p) for p in parts])
     if n < 3:
         return None
-    lyr = np.zeros(n)
-    for r in asr["trusted"]:
-        for i, blk in enumerate(blocks[:n]):
-            if blk[0] < r["end_sec"] and blk[1] > r["start_sec"]:
-                lyr[i] += len(str(r.get("text", "")))
-    mask = lyr > 0
+    x = np.array([float(act[i].get("events", 0)) for i in range(n)])
+    acc = np.zeros(n)
+    for p in parts:
+        acc += 10 ** (np.array([float(p[i].get("db", -120.0)) for i in range(n)]) / 10.0)
+    y = 10.0 * np.log10(acc + 1e-12)
+    mask = x > 0
     k = int(mask.sum())
     if k < min_blocks:
         return None
-    x = lyr[mask]
-    y = np.asarray(es[:n], dtype=float)[mask]
+    x, y = x[mask], y[mask]
     if float(np.std(x)) < 1e-9 or float(np.std(y)) < 1e-9:
         return None
     rho = float(spearmanr(x, y).correlation)
-    need = 0.8 if k < 6 else min_rho
+    need = 0.8 if k < 10 else 0.7
     if not np.isfinite(rho) or abs(rho) < need:
         return None
-    msg = "唱得密的段落能量也高" if rho > 0 else "唱得密的段落能量反而低"
-    return (f"[关联] 歌词密度 × 能量：{msg}"
-            f"（r={rho:+.2f}，{k} 个有人唱的块）——相关，不是因果")
+    # 稳定性：单个块不能决定方向
+    _xc, _yc = x - x.mean(), y - y.mean()
+    drop = int(np.argmax(np.abs(_xc * _yc)))
+    keep = np.ones(k, dtype=bool)
+    keep[drop] = False
+    if int(keep.sum()) >= 3:
+        rho2 = float(spearmanr(x[keep], y[keep]).correlation)
+        if np.isfinite(rho2) and np.sign(rho2) != np.sign(rho):
+            return None
+    word = "唱得密的段落伴奏也更满" if rho > 0 else "唱得密的段落伴奏反而更轻"
+    tag = "；初步，样本刚够" if k < 10 else ""
+    return (f"[关联] 人声发声密度 × 伴奏能量：{word}"
+            f"（rho={rho:+.2f}，{k} 个有人声活动的块{tag}）——相关，不是因果")
 
 
 def _find_hook(ab, es, blocks, inst_ranges, asr):
@@ -2131,7 +2286,8 @@ def _band_shift_text(mixes, dbs, e, i0, i1, n):
     return ("，" + "、".join(parts)) if parts else ""
 
 
-def _timeline(ab, es, blocks, inst_ranges, block_db=None):
+def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
+              y=None, sr=None, vocal_ratio=None):
     """把能量 / 起音密度 / 人声状态串成事件时间线。
 
     三条规矩（按 GPT 的建议改的）：
@@ -2140,6 +2296,50 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None):
       3. 事件按「幅度 × 持续」筛，不是按时间均分
     只报发生了什么，不命名段落角色。
     """
+
+    # 整曲人声占比低于 10% 时，任何「人声 X」都不说 —— 钢琴泛音、混响、观众
+    # 都会被 demucs 分进 vocals 轨，逐块特征分不出「有基频的乐器」和「人声」。
+    # 实测：纯钢琴 4.3%、民乐 0.05%（误报人声），说唱 16%、现场摇滚 28%（真有人声）。
+    _has_vocals = vocal_ratio is None or float(vocal_ratio) >= 0.10
+    _VNAME = "人声" if _has_vocals else "vocals 轨"
+
+    def _refine_time(_t_a, _t_b, _rising=False):
+        """在 [_t_a, _t_b] 内找与事件同向的最大能量变化点，把 16 秒块边界细化到秒级。
+
+        窗口必须只取事件自己的区间 —— 扩到下一块会把相邻事件的变化抢过来
+        （实测：鼓撤 4:32 被定位到 5:08 的鼓回来）。
+        方向也要约束：撤就找最大下降，不能找「最陡」。
+        """
+        if y is None or sr is None or _t_b <= _t_a:
+            return _t_a
+        _a, _b = int(max(0, _t_a) * sr), int(min(len(y) / sr, _t_b) * sr)
+        if _b - _a < 4096:
+            return _t_a
+        _seg = np.asarray(y[_a:_b], dtype=np.float32)
+        _rms = librosa.feature.rms(y=_seg, frame_length=2048, hop_length=512)[0]
+        if len(_rms) < 4:
+            return _t_a
+        _d = np.diff(20.0 * np.log10(_rms + 1e-12))
+        _k = int(np.argmax(_d) if _rising else np.argmin(_d))
+        return _t_a + _k * 512.0 / sr
+
+    def _perio_at(_t):
+        """取 _t 所在块的周期性峰高。没有数据返回 None。
+
+        活动块的时间戳有浮点误差（实测 79.9927 对不上分轨块的 80.0），
+        直接比较会落进前一块 —— 加半块容差再匹配。
+        """
+        if not vocal_perio:
+            return None
+        _tt = _t + 0.5
+        for _b in vocal_perio:
+            if _b.get("start_sec", 0) <= _tt < _b.get("end_sec", 0):
+                return float(_b.get("peak", 0.0))
+        # 曲尾事件可能落在最后一块之后 —— 用它代替，别退回「人声」
+        if _tt >= float(vocal_perio[-1].get("end_sec", 0)):
+            return float(vocal_perio[-1].get("peak", 0.0))
+        return None
+
     if es is None or not blocks or len(es) < 4:
         return []
     n = min(len(es), len(blocks))
@@ -2213,39 +2413,26 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None):
         _e1 = e[min(i1, n - 1)]
         _a0 = act[min(i0 - 1, n - 1)] if not np.isnan(act[min(i0 - 1, n - 1)]) else None
         _a1 = act[min(i1, n - 1)] if not np.isnan(act[min(i1, n - 1)]) else None
-        _vals = f"能量 {_e0:.0f}→{_e1:.0f} dB"
+        _bits = []
+        if abs(_e1 - _e0) >= 1:
+            _bits.append(f"能量 {_e0:.0f}→{_e1:.0f} dB")
         if _a0 is not None and _a1 is not None:
-            _vals += f"、起音 {_a0:.0f}→{_a1:.0f}"
-        parts = []
-        if abs(g["de"]) >= 1.5:
-            parts.append(f"能量{'上升' if g['de'] > 0 else '回落'} {abs(g['de']):.0f} dB")
-        if abs(g["da"]) >= 0.8:
-            parts.append(f"起音{'变密' if g['da'] > 0 else '变疏'}")
-        if g["vch"]:
-            parts.append("人声进入" if voc[i0] else "人声退出")
-        if not parts:
-            continue
-        if g["de"] > 2 and g["da"] > 0.8:
-            parts = [f"编曲加码（{_vals}）"]
-        elif g["de"] < -2 and g["da"] < -0.8:
-            parts = [f"动态收缩（{_vals}）"]
-        elif g["de"] > 2 and g["da"] < -0.8:
-            # 变响但瞬态更少 —— 不是靠「加东西」堆上去的
-            parts = [f"能量升、起音未增（{_vals}）"]
-        elif g["de"] < -2 and g["da"] > 0.8:
-            parts = [f"能量降、起音反增（{_vals}）"]
-        # 哪条轨变了 —— 分轨逐块能量（有 --stems 时才有）
+            _bits.append(f"起音 {_a0:.0f}→{_a1:.0f}")
+        _vals = "、".join(_bits) if _bits else "变化很小"
+        # 先看哪条轨变了 —— 分轨逐块能量（有 --stems 时才有）。
+        # 收集所有变化 ≥3 dB 的轨，而不是只挑变化最大的一条：
+        # 「鼓和贝斯一起回来」比「鼓变响最多」更接近人听到的东西。
         ZH = {"vocals": "人声", "drums": "鼓", "bass": "贝斯", "other": "伴奏"}
+        _chs = []
         if block_db:
-            _best = None
             # 只在混音能量覆盖的时间范围内引用分轨 —— demucs 输出可能比输入长（补零），
             # 补零块的分轨值是假数据，会让尾部事件出现「整体塌了但伴奏变响」的假象。
             _mix_end = t1[n - 1]
             _t_a = min(t0[i0], _mix_end - 0.1)
             _t_b = min(t1[i1], _mix_end - 0.1)
-            for _nm, _vals in block_db.items():
+            for _nm, _blk_vals in block_db.items():
                 def _db_at(_t):
-                    for _bx in _vals:
+                    for _bx in _blk_vals:
                         if _bx["start_sec"] <= _t < _bx["end_sec"]:
                             # 块必须完全落在混音时间范围内，否则是 demucs 在尾部编出来的
                             if _bx["end_sec"] > _mix_end + 1.0:
@@ -2253,26 +2440,92 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None):
                             return _bx["db"]
                     return None
                 _da, _dbb = _db_at(_t_a), _db_at(_t_b)
-                if _da is not None and _dbb is not None:
-                    _d = _dbb - _da
-                    if _best is None or abs(_d) > abs(_best[1]):
-                        _best = (_nm, _d, _da, _dbb)
-            if _best and abs(_best[1]) >= 3:
-                _bn, _bd, _b0, _b1 = _best
-                # 边界判定（2026-10-24）：从近乎无声到有声不是「音量变化」。
-                # 分轨在 -90 dBFS 附近是数值噪声，跳到 -21 会是 73 dB —— 那不是音乐事件，
-                # 是「这条轨进来了」。不区分的话，挑轨逻辑（按 |变化量| 排序）会永远优先报边界，
-                # 把真正 5-10 dB 的编曲变化挤掉。实测 6 首里 4 首犯这个错。
-                if _b0 < -60 and _b1 > -40:
-                    parts.append(f"{ZH.get(_bn, _bn)}进入")
-                elif _b0 > -40 and _b1 < -60:
-                    parts.append(f"{ZH.get(_bn, _bn)}退出")
-                # 人声刚进出时不再报「人声变响/变轻」——那是边界上的残余，会自相矛盾
-                elif not (g["vch"] and _bn == "vocals"):
-                    parts.append(f"{ZH.get(_bn, _bn)}"
-                                 f"{'变响' if _bd > 0 else '变轻'} {abs(_bd):.0f} dB")
+                if _da is None or _dbb is None:
+                    continue
+                _d = _dbb - _da
+                if abs(_d) < 3:
+                    continue
+                # 边界判定（2026-10-24）：从近乎无声到有声不是「音量变化」，是「这条轨进来了」。
+                # 不区分的话，边界（几十 dB 的假跳变）会挤掉真正的 5-10 dB 编曲变化。
+                if _da < -60 and _dbb > -40:
+                    _chs.append((_nm, "进入", None))
+                elif _da > -40 and _dbb < -60:
+                    _chs.append((_nm, "退出", None))
+                elif not (g["vch"] and _nm == "vocals"):
+                    _chs.append((_nm, "变响" if _d > 0 else "变轻", abs(_d)))
+            _chs.sort(key=lambda c: -(c[2] or 99))
+            _chs = _chs[:3]
+
+        # 主句说「发生了什么动作」，括号里才给依据。
+        # 刻度在前，读的人得先换算再理解；动作在前，才推得动（2026-10-27）。
+        # 关键是分开「只是变响」和「编曲变了」——同样是变响，后者才是结构事件。
+        _ins = [c for c in _chs if c[1] == "进入"]
+        _outs = [c for c in _chs if c[1] == "退出"]
+        _louds = [c for c in _chs if c[1] in ("变响", "变轻")]
+        _e_up, _e_dn = g["de"] > 2, g["de"] < -2
+        _da_up, _da_dn = g["da"] > 0.8, g["da"] < -0.8
+        # 方向改用端点差：逐块累积会把「先升后回落」判成「变疏」，而端点只差几点。
+        # 起音是「每秒几个」，端点差 5 个/秒以下当噪声（实测 K-pop 0:48 中过这一枪）。
+        if _e0 is not None:
+            _e_up, _e_dn = (_e1 - _e0) > 2, (_e1 - _e0) < -2
+        if _a0 is not None and _a1 is not None:
+            _da_up, _da_dn = (_a1 - _a0) > 5, (_a1 - _a0) < -5
+        _nm_of = lambda cs: "、".join(ZH.get(c[0], c[0]) for c in cs)
+        _act = ""
+        if i1 >= n - 2 and _e1 < -50:
+            _act = "到结尾了"
+        elif _ins and _e_up:
+            # 进入的含 vocals 时先看有没有稳定基频 —— 观众欢呼也会被分进 vocals 轨
+            _pk = _perio_at(t0[min(i1, n - 1)])
+            if any(c[0] == "vocals" for c in _ins) and _pk is not None and _pk < 0.30:
+                _act = "有声音进来，但没有稳定基频（可能是欢呼/噪声）"
+            else:
+                _act = f"编曲重新铺开：{_nm_of(_ins).replace('人声', _VNAME)}回来"
+        elif _outs and _e_dn:
+            _act = f"编曲收掉：{_nm_of(_outs).replace('人声', _VNAME)}撤了"
+        elif _ins or _outs:
+            _act = f"编配换了、响度没大动：{_nm_of(_ins + _outs)}"
+        elif _e_up and _da_up:
+            # 变响同时起音变密 —— 不是单纯推响度，有东西加进来了
+            _act = "变响，节奏也变密"
+        elif _e_up:
+            _act = "只是变响"
+        elif _e_dn and _da_dn:
+            _act = "变轻，节奏也变稀"
+        elif _e_dn:
+            _act = "只是变轻"
+        elif _da_up:
+            _act = "节奏变密、能量没动"
+        elif _da_dn:
+            _act = "节奏变疏、能量没动"
+        elif g["vch"]:
+            _act = "换人声"
+        else:
+            continue
+        parts = [f"{_act}（{_vals}）"]
+        if _louds and _act.startswith("只是"):
+            parts.append("、".join(
+                f"{ZH.get(c[0], c[0])}{c[1]} {c[2]:.0f} dB" for c in _louds[:2]))
+        if g["vch"] and not _act.startswith("换人声"):
+            _vtxt = (f"{_VNAME}进入" if voc[i0] else f"{_VNAME}退出")
+            # 观众欢呼也会被分进 vocals 轨 —— 用自相关峰高区分：
+            # 没有稳定基频就不是人声。阈值 0.30 来自一首现场版实测
+            # （欢呼 0.136 / 主唱 0.61），样本少，是工程起点不是定律。
+            _pk = _perio_at(t0[min(i1, n - 1)])
+            if _pk is not None and _pk < 0.30:
+                _vtxt = ("vocals 轨响起来了，但没有稳定基频（可能是欢呼/噪声）"
+                         if voc[i0] else "vocals 轨静下去了")
+            elif not _has_vocals:
+                _vtxt = (f"vocals 轨有信号，但整曲人声只占 {float(vocal_ratio)*100:.1f}%"
+                         f"（更像乐器泄漏）" if voc[i0] else "vocals 轨静下去了")
+            # 主句已经说过「没有稳定基频」就不再重复
+            if "没有稳定基频" not in _act and _vtxt not in _act:
+                parts.append(_vtxt)
         _band_txt = _band_shift_text(_mixes, _dbs, e, i0, i1, n)
         tail = f"，该状态持续 {span:.0f} 秒" if span >= 32 else ""
+        # 时间细化不做（2026-10-27）：三种窗口方案都试过，偏移只从 ±16 秒收敛到 ±8 秒，
+        # 根因是混音能量里还有别的乐器 —— 用混音找「鼓撤」的精确时刻本来就不准。
+        # 要准只能用鼓轨，但分轨是 16 秒粒度。块级精度对段落级描述够用。
         events.append((t0[i0], "；".join(parts),
                        abs(g["de"]) / 3.0 + abs(g["da"]) * 2 + span / 60.0,
                        _band_txt, tail))
@@ -2324,7 +2577,7 @@ def verdict_lines(d):
 
     lines = []
 
-    # 1) 速度:Beat This 给的是音乐学拍,直接报;librosa 回退时给两层并列
+    # 1) 速度:节拍模型给的是音乐学拍,直接报;librosa 回退时给两层并列
     #    人耳数的拍和检测器数的拍常常差一倍 —— 推荐错了比不推荐更糟。
     _lay = bpm_layers(tempo)
     if not _lay:
@@ -2455,7 +2708,7 @@ def verdict_lines(d):
         out.append(_ar)
     out.append("")
     if d.get("bpm_source") == "beat_this":
-        bpm_txt = f"{tempo:.0f} 拍(Beat This)"
+        bpm_txt = f"{tempo:.0f} 拍"
     else:
         _lay2 = bpm_layers(tempo)
         bpm_txt = (f"{_lay2[0]:.0f} / {_lay2[1]:.0f} 拍(两层)"
@@ -2474,7 +2727,7 @@ def verdict_lines(d):
     mn = d.get("musicnn")
     if mn and mn.get("available") and mn.get("tags"):
         tags_txt = "、".join(f"{t['label']} {t['score']:.2f}" for t in mn["tags"])
-        out.append(f"[标签] 模型预测标签(MTT 50 类,仅作辅助参考,不等同于流派识别): {tags_txt}")
+        out.append(f"[标签] 模型预测标签(50 类,仅作辅助参考,不等同于流派识别): {tags_txt}")
     # 分轨(可选):分离后各轨能量占比 + 人声判定。
     # 分轨标签只当证据,不进 [判断] —— other 轨的 classical 不能变成「这是古典」。
     st = d.get("stems")
@@ -2504,8 +2757,8 @@ def verdict_lines(d):
             out.append("[关联] " + _links[0])
             out.extend("       " + ln for ln in _links[1:])
 
-    # B3：歌词密度 × 能量（需要 ASR；样本块数不够或相关弱时不输出）
-    _lyr = _lyric_energy_link(asr, es, blocks)
+    # B3：人声发声密度 × 伴奏能量（需要分轨；数据不足或关系不明确时沉默）
+    _lyr = _vocal_activity_link(d.get("stems"))
     if _lyr:
         out.append(_lyr)
 
@@ -2513,7 +2766,10 @@ def verdict_lines(d):
     # 不要加 d.get("detail") 条件 —— verdict_lines 只在默认路径被调用，
     # 加了条件等于永远不显示（--detail 走的是另一条输出路径）。
     _tl = _timeline(ab, es, blocks, _inst,
-                    (d.get("stems") or {}).get("block_db"))
+                    (d.get("stems") or {}).get("block_db"),
+                    (d.get("stems") or {}).get("vocal_periodicity"),
+                    d.get("_y"), d.get("_sr"),
+                    ((d.get("stems") or {}).get("vocals") or {}).get("ratio"))
     if _tl:
         out.append("[时间线]")
         _has_band = False
@@ -2764,7 +3020,7 @@ def main():
         b["start_sec"] = round(b["start_sec"] + offset, 1)
         b["end_sec"] = round(b["end_sec"] + offset, 1)
 
-    # ---- 声源/乐器分类(可选增强:YAMNet;模型缺失时返回 None)----
+    # ---- 声源/乐器分类(可选增强;模型缺失时返回 None)----
     sources = analyze_sources(y, sr)
     musicnn = analyze_musicnn(y, sr)
 
@@ -2948,7 +3204,7 @@ def main():
                 "chord_blocks_total": int(chords["blocks_total"]),
             },
             "sources": sources if sources else {"available": False,
-                                                "reason": "onnxruntime 或 YAMNet 模型缺失"},
+                                                "reason": "onnxruntime 或声源模型缺失"},
             "activity": {
                 "summary": activity,
                 "timeline": activity_blocks,
@@ -2983,6 +3239,7 @@ def main():
             "musicnn": musicnn, "stems": stems, "asr": asr,
             "offset": offset, "total_dur": total_dur,
             "detail": bool(args.detail),
+            "_y": y, "_sr": sr,
         }):
             print(line)
         if preview_asr and preview_sec:
@@ -3025,7 +3282,7 @@ def main():
     # 低频鼓点第二意见:与 beat tracker 差接近 2 倍时,说明两个拍层级都有能量
     # 拍速永远有两个层级:人耳和检测器常常差一倍,别让人把上面的数当唯一答案
     # 拍速永远有两个层级:人耳和检测器常常差一倍,别让人把上面的数当唯一答案。
-    # Beat This 模式下不再提两层 —— 它本来就是给出一个确定的拍速,而 JSON 那边已经
+    # 节拍模型模式下不再提两层 —— 它本来就是给出一个确定的拍速,而 JSON 那边已经
     # 把 bpm_layers 置 null 了,文本这层以前没跟齐。
     _lay3 = None if bpm_source == "beat_this" else bpm_layers(tempo)
     if _lay3:
@@ -3089,20 +3346,20 @@ def main():
                 s = ", ".join(f"{fmt_time(blocks[j + 1][0])}({d[j]:.0f}dB)" for j in pts)
                 print(f"[SEG]  变化最大的段落边界: {s}")
 
-    # ---- 声源/乐器(可选增强:YAMNet)----
+    # ---- 声源/乐器(可选增强)----
     if sources and sources.get("available"):
         hints = sources.get("hints") or []
         hint_names = {h["label"] for h in hints}
         others = [t for t in sources.get("top", []) if t["label"] not in hint_names][:4]
         print()
-        print("[SRC]  声源标签存档(YAMNet 521 类)—— 仅供参考,不要写进结论")
+        print("[SRC]  声源标签存档(521 类)—— 仅供参考,不要写进结论")
         _ve = sources.get("vocal")
         if _ve:
             _v = {"有": "有演唱", "无": "没检测到演唱"}.get(_ve["verdict"], "说不准")
             print(f"  [人声证据] max(Singing,Speech) 峰值 {_ve['peak']:.3f}"
                   f" @{fmt_time(_ve['peak_t'])} | p95 {_ve['p95']:.3f} → {_v}")
-            # 「人声段」= YAMNet 当门卫 + 相对电平当手电筒。
-            # YAMNet 单独做不了定位：它是事件检测，Queen 的 p95 只有 0.09，
+            # 「人声段」= 声源模型当门卫 + 相对电平当手电筒。
+            # 声源模型单独做不了定位：它是事件检测，Queen 的 p95 只有 0.09，
             # 只有 4 秒超过 0.15。相对电平单独做不了判定：电子乐里 riser 也会被
             # demucs 分进 vocals 轨（Martin 实测三处全是音效，人耳确认）。
             if _ve["verdict"] == "有":
@@ -3122,8 +3379,8 @@ def main():
                 else:
                     print("  [人声段] 有演唱，但分轨没给出明显区间（没跑分轨时也会这样）")
             else:
-                print("  [人声段] YAMNet 判没检测到演唱 —— 不找段（避免把 riser/合成器当人声）")
-            # 旋律来源:YAMNet 判「有没有唱过」,分轨判「分离干不干净」,两件事合起来才敢选轨
+                print("  [人声段] 声源模型判没检测到演唱 —— 不找段（避免把 riser/合成器当人声）")
+            # 旋律来源:声源模型判「有没有唱过」,分轨判「分离干不干净」,两件事合起来才敢选轨
             _sr = (stems or {}).get("vocals", {}).get("ratio")
             if _ve["verdict"] == "有":
                 if _sr is None:
@@ -3151,7 +3408,7 @@ def main():
             print("  ⚠ 分数普遍偏低 —— 模型对本曲不确信(训练数据偏西方流行)")
     elif sources is None:
         print()
-        print("[SRC]  (YAMNet 未安装,跳过声源分类)")
+        print("[SRC]  (声源模型未安装,跳过声源分类)")
 
     # ---- 音高轮廓（--detail 路径；默认路径在 return 前已经调过）----
     if args.pitch:
