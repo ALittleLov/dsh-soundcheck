@@ -936,10 +936,10 @@ def narrate(d):
                 tail = "这段" if section else "整首"
                 out.append(f"「密度」在各段也比较平均,{tail}是一个稳定推进的状态。")
 
-    # --- 4. 调性 ---
-    if key_r >= 0.75:
+    # --- 4. 调性（同一道门槛：模板不贴合时，别把候选说成调性）---
+    if key_r >= 0.75 and fit["tonality"] >= 0.65:
         out.append(f"调性 {key},匹配得比较稳。")
-    elif key_r >= 0.65:
+    elif key_r >= 0.65 and fit["tonality"] >= 0.45:
         out.append(f"调性大概在 {key} 附近,但有摇摆。")
     else:
         out.append("调性拿不准 —— 西方调性模板对这段音乐不太适用。")
@@ -2207,7 +2207,7 @@ def _arousal_line(d):
         word = "偏平静"
     else:
         return None
-    return f"[状态] {word}（{'、'.join(tags)}）——由节奏密度/响度/速度推得，不是听感判断"
+    return f"[状态] 推测：{word}（{'、'.join(tags)}）—— 不是听感判断"
 
 
 def _four_dims(d):
@@ -2237,14 +2237,18 @@ def _four_dims(d):
         elif rms < -15.6:
             parts.append("偏弱")
     key = str(d.get("key") or "")
-    if "minor" in key:
-        parts.append("偏冷")
-    elif "major" in key:
-        parts.append("偏暖")
+    # 冷暖只在大/小调模板站得住时才说（fit>=0.45）。模板不贴合时把 key
+    # 当调式用，等于给「偏暖/偏冷」编一个不存在的依据 —— 这一维宁可跳过。
+    _kfit = (d.get("fit") or {}).get("tonality")
+    if _kfit is None or _kfit >= 0.45:
+        if "minor" in key:
+            parts.append("偏冷")
+        elif "major" in key:
+            parts.append("偏暖")
     if not parts:
         return None
-    return ("[四维] " + " · ".join(parts)
-            + "（明暗=谱质心，快慢=BPM，强弱=RMS，冷暖=调式）")
+    return ("[四维] 推测：" + " · ".join(parts)
+            + "（明暗=谱质心，快慢=BPM，强弱=RMS，冷暖=调式；区间推断，不是测量值）")
 
 
 def _vocal_activity_link(stems, min_blocks=8):
@@ -2721,6 +2725,10 @@ def verdict_lines(d):
         if _alt is not None and bpm_conflict(tempo, _alt):
             speed = (f"速度约 {tempo:.0f} 拍，但另一个算法给 {float(_alt):.0f} 拍，"
                      "两者对不上——这一项可能是错的，别当准数")
+        elif fit["beat"] < 0.45:
+            # 拍点间隔本身不匀（无伴奏、自由节奏、变速）时，平均值只能当参考。
+            # 不说的话，读的人会把这个数当稳定测量的 BPM。
+            speed = f"速度约 {tempo:.0f} 拍，但拍点本身不稳，当参考"
         else:
             speed = f"速度约 {tempo:.0f} 拍"
     elif d["bpm_suspect"]:
@@ -2733,11 +2741,13 @@ def verdict_lines(d):
     # 2) 调性:分"贴合"与"只是候选",和 [可信] 保持一致
     if fit["tonality"] >= 0.65 and key_r >= 0.75:
         mode = "小调" if "minor" in key else "大调"
-        key_txt = f"{key.split()[0]} {mode},底色{'偏暗' if mode == '小调' else '偏亮'}"
-    elif key_r >= 0.65:
-        key_txt = f"调性大概在 {key.split()[0]},但不太稳"
+        # 调式推的是冷暖，不是明暗 —— 以前这里写「底色偏暗」，
+        # 和 [四维] 用谱质心得到的明暗是两套依据，同曲会互相打架。
+        key_txt = f"{key.split()[0]} {mode},底色{'偏冷' if mode == '小调' else '偏暖'}"
+    elif fit["tonality"] >= 0.45 and key_r >= 0.65:
+        key_txt = f"调性大概在 {key.split()[0]},但只是模板候选,不太稳"
     else:
-        key_txt = "调性判断不了(可能不是西方调式,也可能素材太稀)"
+        key_txt = "调性判断不了(模板不贴合,或素材太稀)"
 
     # 3) 响度与母带
     if section:
@@ -2839,6 +2849,9 @@ def verdict_lines(d):
     if section:
         tail = f"(全曲 {fmt_time(d['total_dur'])})" if d.get("total_dur") else ""
         out.append(f"[SCOPE] 只分析了 {fmt_time(d['offset'])}–{fmt_time(d['offset'] + dur)}{tail}")
+    # 四类证据的读法（2026-10-28，任务清单第 23 条）：每份报告自带分界，
+    # 不依赖读者先读过外部文档。措辞与《证据状态标准》一致。
+    out.append("[读法] 「推测/候选/可能」=推断；直接报数=测量；没提到=测不出来")
     out.append("[判断] " + lines[0])
     out.extend("       " + ln for ln in lines[1:])
     # arousal 一行：由已有数字推得，中间态不输出（见 _arousal_line）
@@ -2890,12 +2903,16 @@ def verdict_lines(d):
         parts = [f"{n} {st['stems'][n]['ratio'] * 100:.0f}%" for n in order]
         vv = st.get("vocals") or {}
         if parts:
-            out.append(f"[分轨] {vv.get('label', '已分离')} · " + " | ".join(parts))
+            # 占比是条件性结果：demucs 会串音，人声轨里装的也可能不是人声（见 X5）。
+            out.append(f"[分轨] {vv.get('label', '已分离')} · " + " | ".join(parts)
+                       + "（分轨有串音，占比看趋势）")
         if vv:
             if vv.get("present"):
-                out.append(f"       人声轨有实质能量({vv['ratio'] * 100:.0f}%),是唱的,不是纯器乐。")
+                out.append(f"       人声轨有实质能量({vv['ratio'] * 100:.0f}%),是唱的,不是纯器乐"
+                           "（串音可能夸大占比，别当精确值）")
             else:
-                out.append(f"       人声轨只占 {vv['ratio'] * 100:.3f}%,整首没有真的人声。")
+                out.append(f"       人声轨只占 {vv['ratio'] * 100:.3f}%,更像器乐"
+                           "（分轨会漏、也会串，这条只能当线索）")
     # 歌词听写(可选组件):机器听写,只列可信段;疑幻觉段连内容都不给。
     asr = d.get("asr")
     _inst = ((asr or {}).get("instrumental")
@@ -2935,7 +2952,8 @@ def verdict_lines(d):
                     d.get("_y"), d.get("_sr"),
                     ((d.get("stems") or {}).get("vocals") or {}).get("ratio"))
     if _tl:
-        out.append("[时间线]")
+        # 动作词（「鼓撤了」「编曲铺开」）是归因，括号里的数字才是测量。
+        out.append("[时间线] 动作=推断，括号内=测量")
         _has_band = False
         for _ts, _txt in _tl:
             if any(k in _txt for k in ("B1", "B2", "B3", "B4", "B5", "B6")):
