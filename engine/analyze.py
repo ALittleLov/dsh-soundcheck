@@ -2610,7 +2610,10 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
             _da_up, _da_dn = (_a1 - _a0) > 5, (_a1 - _a0) < -5
         _nm_of = lambda cs: "、".join(ZH.get(c[0], c[0]) for c in cs)
         _act = ""
-        if i1 >= n - 2 and _e1 < -50:
+        # 「到结尾了」= 塌下去之后**再没回来**。只看当前块会误判：
+        # 塌一块、隔一块又升回来的情形不是结尾。片段模式最明显 ——
+        # 60 秒只有 4 块，「最后两块」占了半段，中段一塌就被说成结尾。
+        if i1 >= n - 2 and _e1 < -50 and float(np.max(e[i1:])) < -50:
             _act = "到结尾了"
         elif _ins and _e_up:
             # 进入的含 vocals 时先看有没有稳定基频 —— 观众欢呼也会被分进 vocals 轨
