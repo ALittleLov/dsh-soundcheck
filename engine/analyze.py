@@ -551,7 +551,7 @@ def analyze_sources(y, sr, top_k=8):
     # 只报强项（AP≥0.9 那一档）；管乐/小众拨弦不报——实测区分不开。
     # ⚠ 漏报比误报多：5 首人工核对，报出的 4/5 对，但一半乐器漏了。
     _INSTR = [
-        ("吉他", ["Guitar", "Acoustic guitar", "Electric guitar"], 0.01),
+        ("吉他", ["Guitar", "Acoustic guitar", "Electric guitar"], 0.015),
         ("钢琴", ["Piano", "Electric piano"], 0.02),
         ("合成器", ["Synthesizer", "Sampler"], 0.01),
         ("鼓", ["Drum kit", "Drum", "Snare drum", "Hi-hat"], 0.01),
@@ -2210,6 +2210,43 @@ def _arousal_line(d):
     return f"[状态] {word}（{'、'.join(tags)}）——由节奏密度/响度/速度推得，不是听感判断"
 
 
+def _four_dims(d):
+    """明暗 / 快慢 / 强弱 / 冷暖 —— 四维定性，全部来自已有测量。
+
+    阈值取 100 首真实曲目的三分位（谱质心 2300/2750 Hz、RMS −15.6/−13.7 dBFS、BPM 99/129）。
+    中间态直接不说：四维凑不齐没关系，宁可少说也不硬凑。
+    冷暖用调式（大调偏暖、小调偏冷）——调性不可靠时这一维跳过。
+    """
+    parts = []
+    cen = d.get("centroid")
+    if cen is not None and np.isfinite(cen):
+        if cen < 2300:
+            parts.append("偏暗")
+        elif cen > 2750:
+            parts.append("偏亮")
+    bpm = float(d.get("tempo") or 0)
+    if bpm > 0:
+        if bpm >= 129:
+            parts.append("偏快")
+        elif bpm < 99:
+            parts.append("偏慢")
+    rms = d.get("rms_db")
+    if rms is not None and np.isfinite(rms):
+        if rms > -13.7:
+            parts.append("偏强")
+        elif rms < -15.6:
+            parts.append("偏弱")
+    key = str(d.get("key") or "")
+    if "minor" in key:
+        parts.append("偏冷")
+    elif "major" in key:
+        parts.append("偏暖")
+    if not parts:
+        return None
+    return ("[四维] " + " · ".join(parts)
+            + "（明暗=谱质心，快慢=BPM，强弱=RMS，冷暖=调式）")
+
+
 def _vocal_activity_link(stems, min_blocks=8):
     """B3：唱得越密，伴奏是不是也越满。（不依赖 ASR）
 
@@ -2808,6 +2845,10 @@ def verdict_lines(d):
     _ar = _arousal_line(d)
     if _ar:
         out.append(_ar)
+    # 四维（F4）：明暗/快慢/强弱/冷暖，同样只报明确的那几维
+    _fd = _four_dims(d)
+    if _fd:
+        out.append(_fd)
     out.append("")
     if d.get("bpm_source") == "beat_this":
         bpm_txt = f"{tempo:.0f} 拍"
@@ -2834,8 +2875,12 @@ def verdict_lines(d):
     _src = d.get("sources") or {}
     _ins = _src.get("instruments") or []
     if _ins:
-        _txt = "、".join(f"{i['name']}（{i['seconds']:.0f} 秒 / {i['segments']} 段）" for i in _ins)
-        out.append(f"[乐器] 可能有 {_txt} —— 从混音里猜的，漏报比误报多，别当配器清单")
+        _parts = []
+        for i in _ins:
+            _sp = i.get("spans") or []
+            _sp_txt = ("，如 " + "、".join(f"{fmt_time(a)}–{fmt_time(b)}" for a, b in _sp[:2])) if _sp else ""
+            _parts.append(f"{i['name']}（{i['seconds']:.0f} 秒 / {i['segments']} 段{_sp_txt}）")
+        out.append(f"[乐器] 可能有 {'、'.join(_parts)} —— 从混音里猜的，漏报比误报多，别当配器清单")
     # 分轨(可选):分离后各轨能量占比 + 人声判定。
     # 分轨标签只当证据,不进 [判断] —— other 轨的 classical 不能变成「这是古典」。
     st = d.get("stems")
@@ -2873,6 +2918,17 @@ def verdict_lines(d):
     # 事件时间线：把能量 / 起音 / 人声串成先后关系
     # 不要加 d.get("detail") 条件 —— verdict_lines 只在默认路径被调用，
     # 加了条件等于永远不显示（--detail 走的是另一条输出路径）。
+    # 能量条（2026-10-28，零依赖）：每 16 秒一格，高度按本曲 min/max 归一。
+    # 比一堆 dB 数字直观，「整首长什么样」一眼能看出来。
+    if blocks and len(blocks) >= 4:
+        _eb = [b[2] for b in blocks]
+        _lo, _hi = min(_eb), max(_eb)
+        _span = max(_hi - _lo, 1e-6)
+        _bars = "▁▂▃▄▅▆▇█"
+        _line = "".join(_bars[min(7, int((v - _lo) / _span * 7 + 0.5))] for v in _eb)
+        _dur = d.get("dur") or (blocks[-1][1] if blocks else 0)
+        out.append(f"[能量] {_line}  （每格 16 秒，{fmt_time(0)}–{fmt_time(_dur)}，共 {len(_eb)} 格）")
+
     _tl = _timeline(ab, es, blocks, _inst,
                     (d.get("stems") or {}).get("block_db"),
                     (d.get("stems") or {}).get("vocal_periodicity"),
@@ -3065,6 +3121,11 @@ def main():
     # ---- 能量(绝对 dBFS,不归一化;时间统一换成全曲绝对时间)----
     rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=hop)[0]
     rms_dbfs = librosa.amplitude_to_db(rms, ref=1.0)   # 绝对 dBFS
+    # 谱质心（F4「明暗」维度用）：整首均值，Hz。阈值拿 100 首真实曲目的三分位定的。
+    try:
+        centroid = float(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)))
+    except Exception:  # noqa: BLE001
+        centroid = float("nan")
     blocks = [(t0 + offset, t1 + offset, e)
               for t0, t1, e in energy_blocks(rms_dbfs, sr, hop, args.blocks)]
 
@@ -3227,6 +3288,7 @@ def main():
                 "chord_unresolved": chords["unresolved_ratio"],
                 "seg": [b["time_sec"] for b in bounds],
                 "src": [h["label"] for h in hints],
+                "instr": [i["name"] for i in ((sources or {}).get("instruments") or [])],
                 "src_low": bool((sources or {}).get("low_confidence")),
                 "stems": ({"vocals": stems.get("vocals"),
                            "ratios": {k: v["ratio"] for k, v in stems.get("stems", {}).items()}}
@@ -3359,6 +3421,7 @@ def main():
                                    else round(float(tempo_alt), 1)),
             "key": key, "key_r": key_r, "key_gap": key_gap, "ka_type": ka_type,
             "rms_db": rms_db, "peak_db": peak_db, "std_db": std_db,
+            "centroid": centroid,
             "lufs": lufs, "head_flat": head_flat,
             "n_top": n_top, "over_scale": over_scale, "plateau_runs": plateau_runs,
             "es": es, "blocks": blocks, "activity_blocks": activity_blocks,
