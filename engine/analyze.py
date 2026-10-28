@@ -247,15 +247,25 @@ def detect_tempo(y, sr):
     """检测拍速。有节拍模型就用它,否则回退 librosa。
 
     返回 (tempo, tempo_alt, beat_times, kick_bpm, source)。
+
+    tempo_alt 现在**两种来源都给**：节拍模型也会锁错层（实测一首歌模型给 143、
+    人工标注 128），所以即使走模型也跑一次 librosa 当第二意见，供输出提示「可能不稳」。
     """
     bt = detect_tempo_beatthis(y, sr)
+
+    # 第二意见：librosa 拍速（无论走不走模型都算）
+    try:
+        tempo_l, beats_l = librosa.beat.beat_track(y=y, sr=sr)
+        tempo_l = float(np.atleast_1d(tempo_l)[0])
+    except Exception:  # noqa: BLE001
+        tempo_l, beats_l = float("nan"), np.array([], dtype=int)
+
     if bt is not None:
         bpm, times = bt
-        return bpm, float("nan"), times, float("nan"), "beat_this"
+        return bpm, tempo_l, times, float("nan"), "beat_this"
 
-    tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
-    tempo = float(np.atleast_1d(tempo)[0])
-    times = librosa.frames_to_time(beats, sr=sr)
+    tempo = tempo_l
+    times = librosa.frames_to_time(beats_l, sr=sr)
     if len(times) > 3:
         gaps = np.diff(times)
         med = float(np.median(gaps))
@@ -1911,6 +1921,25 @@ def pick_preview_segment(y, sr, block_sec=4.0, min_sec=8.0, max_sec=64.0):
     return start, length, f"数据选段:{best_len}块"
 
 
+def bpm_conflict(a, b, tol=0.08):
+    """两个 BPM 是否真的对不上（排除倍频、半速、三连这类正常分歧）。
+
+    2026-10-28 加：实测节拍模型会把一首 128 的歌锁成 143，
+    它自己不报错；用第二个算法的值做交叉检查，才看得出来。
+    """
+    try:
+        a, b = float(a), float(b)
+    except (TypeError, ValueError):
+        return False
+    if not (np.isfinite(a) and np.isfinite(b)) or a <= 0 or b <= 0:
+        return False
+    r = a / b
+    for cand in (0.5, 2.0, 1.5, 2.0 / 3.0, 0.75, 4.0 / 3.0):
+        if abs(r - cand) <= 0.05:
+            return False
+    return abs(r - 1.0) > tol
+
+
 def bpm_layers(tempo):
     """给出两个倍频层级:检测值本身 + 最近的倍频(×2 或 ÷2)。
 
@@ -2598,7 +2627,12 @@ def verdict_lines(d):
     if not _lay:
         speed = "速度测不出来"
     elif d.get("bpm_source") == "beat_this":
-        speed = f"速度约 {tempo:.0f} 拍"
+        _alt = d.get("bpm_second_opinion")
+        if _alt is not None and bpm_conflict(tempo, _alt):
+            speed = (f"速度约 {tempo:.0f} 拍，但另一个算法给 {float(_alt):.0f} 拍，"
+                     "两者对不上——这一项可能是错的，别当准数")
+        else:
+            speed = f"速度约 {tempo:.0f} 拍"
     elif d["bpm_suspect"]:
         speed = (f"拍速是两层:{_lay[0]:.0f} 和 {_lay[1]:.0f},"
                  "低频层和瞬态层各说各的,别只信一个")
@@ -3178,6 +3212,9 @@ def main():
                 "bpm": round(tempo, 1),
                 "bpm_source": bpm_source,
                 "bpm_alternative": bpm_alt,
+                # 第二意见：另一个算法给的拍速（模型也可能锁错层，2026-10-28）
+                "bpm_second_opinion": (None if not np.isfinite(tempo_alt)
+                                       else round(float(tempo_alt), 1)),
                 "bpm_maybe_double": bpm_suspect,
                 "bpm_layers": (None if bpm_source == "beat_this"
                                else ({"primary": bpm_layers(tempo)[0],
@@ -3259,6 +3296,8 @@ def main():
             "dur": dur, "section": section,
             "tempo": tempo, "bpm_suspect": bpm_suspect, "kick_bpm": kick_bpm,
             "bpm_source": bpm_source,
+            "bpm_second_opinion": (None if not np.isfinite(tempo_alt)
+                                   else round(float(tempo_alt), 1)),
             "key": key, "key_r": key_r, "key_gap": key_gap, "ka_type": ka_type,
             "rms_db": rms_db, "peak_db": peak_db, "std_db": std_db,
             "lufs": lufs, "head_flat": head_flat,
