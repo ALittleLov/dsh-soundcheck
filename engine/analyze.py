@@ -94,7 +94,7 @@ YAMNET_SOFT_LABELS = {
     "Dance music", "Dub", "Reggaeton", "Ska", "Punk", "Music for children",
 }
 
-# Krumhansl-Schmuckler 调性模板
+# 西方调性轮廓模板（大调/小调各一套，算 12 个转位的相关度）
 MAJOR = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
 MINOR = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
 
