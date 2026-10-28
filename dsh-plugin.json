@@ -3,7 +3,7 @@
   "manifestVersion": "0.15",
   "id": "dsh-soundcheck.local",
   "name": "dsh-soundcheck",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "license": "MIT",
   "description": "本机离线分析音频与音乐：BPM、调性、能量走势、分轨、人声段、歌词候选、音高轮廓。音频不出本机。",
   "facets": {
