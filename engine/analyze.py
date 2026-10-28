@@ -545,6 +545,58 @@ def analyze_sources(y, sr, top_k=8):
     # 去掉情绪/场景/风格替身,只留『可能是某种乐器/地域』的线索
     hints = [t for t in top if t["label"] not in YAMNET_SOFT_LABELS][:6]
 
+    # 乐器候选（E1，2026-10-28）
+    # 做法：逐帧分数 > 该类阈值 → 连续段（允 2 帧间断、段长≥4 帧≈2 秒）
+    #      支持≥6 秒且≥2 段才报。阈值来自公开多标签评测集上每类 F1 最优点。
+    # 只报强项（AP≥0.9 那一档）；管乐/小众拨弦不报——实测区分不开。
+    # ⚠ 漏报比误报多：5 首人工核对，报出的 4/5 对，但一半乐器漏了。
+    _INSTR = [
+        ("吉他", ["Guitar", "Acoustic guitar", "Electric guitar"], 0.01),
+        ("钢琴", ["Piano", "Electric piano"], 0.02),
+        ("合成器", ["Synthesizer", "Sampler"], 0.01),
+        ("鼓", ["Drum kit", "Drum", "Snare drum", "Hi-hat"], 0.01),
+        ("贝斯", ["Bass guitar"], 0.01),
+        ("小提琴", ["Violin", "Fiddle"], 0.01),
+        ("大提琴", ["Cello"], 0.01),
+        ("风琴", ["Organ"], 0.02),
+        ("镲", ["Cymbal"], 0.01),
+    ]
+    instruments = []
+    try:
+        hop_s = (len(y16) / 16000) / max(1, scores.shape[0])
+        for cn, keys, thr in _INSTR:
+            idxs = [i for i, n in enumerate(names) if any(k.lower() in n.lower() for k in keys)]
+            if not idxs:
+                continue
+            s = scores[:, idxs].max(axis=1)
+            runs, start, last = [], None, None
+            for fi, v in enumerate(s >= thr):
+                if v:
+                    if start is None:
+                        start = fi
+                    last = fi
+                elif start is not None and fi - last > 2:
+                    runs.append((start, last))
+                    start = None
+            if start is not None:
+                runs.append((start, last))
+            runs = [(a, b) for a, b in runs if b - a + 1 >= 4]
+            if not runs:
+                continue
+            total = sum(b - a + 1 for a, b in runs) * hop_s
+            if total >= 6 and len(runs) >= 2:
+                instruments.append({
+                    "name": cn,
+                    "seconds": round(total, 1),
+                    "segments": len(runs),
+                    "peak": round(float(s.max()), 2),
+                    "spans": [(round(a * hop_s, 1), round(b * hop_s, 1)) for a, b in runs[:3]],
+                })
+        instruments.sort(key=lambda x: -x["seconds"])
+        instruments = instruments[:4]
+    except Exception:  # noqa: BLE001
+        instruments = []
+
     # 人声证据(逐窗口): Singing + Speech 取较大者。
     # 不用 Humming —— 实测纯钢琴段给 0.205、真人声段只给 0.020,完全反向。
     # 阈值 0.15/0.06 来自 4 首歌 + 1 个构造样本(3 分钟纯器乐 + 末尾 10 秒人声):
@@ -590,6 +642,7 @@ def analyze_sources(y, sr, top_k=8):
         "top": top,
         "music_related": music,
         "hints": hints,
+        "instruments": instruments,
         "max_score": max_score,
         "vocal": vocal,
         "low_confidence": bool(max_score < 0.1),
@@ -2777,6 +2830,12 @@ def verdict_lines(d):
     if mn and mn.get("available") and mn.get("tags"):
         tags_txt = "、".join(f"{t['label']} {t['score']:.2f}" for t in mn["tags"])
         out.append(f"[标签] 模型预测标签(50 类,仅作辅助参考,不等同于流派识别): {tags_txt}")
+    # 乐器候选（E1）：只报强项、只报「可能」。漏报比误报多，措辞必须软。
+    _src = d.get("sources") or {}
+    _ins = _src.get("instruments") or []
+    if _ins:
+        _txt = "、".join(f"{i['name']}（{i['seconds']:.0f} 秒 / {i['segments']} 段）" for i in _ins)
+        out.append(f"[乐器] 可能有 {_txt} —— 从混音里猜的，漏报比误报多，别当配器清单")
     # 分轨(可选):分离后各轨能量占比 + 人声判定。
     # 分轨标签只当证据,不进 [判断] —— other 轨的 classical 不能变成「这是古典」。
     st = d.get("stems")
