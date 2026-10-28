@@ -1,6 +1,6 @@
 {
   "name": "dsh-soundcheck",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "Local music analysis for DSH: audio -> a short human-readable verdict",
   "type": "module",
   "main": "lib/index.js",
@@ -8,11 +8,13 @@
     ".": {
       "default": "./lib/index.js"
     },
+    "./client": "./client.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "lib",
+    "client.js",
     "engine",
     "dsh-plugin.json",
     "cordis.patch.yml",
@@ -21,6 +23,15 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
     }
   },
   "os": [

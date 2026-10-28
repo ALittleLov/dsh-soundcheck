@@ -960,35 +960,50 @@ def integrated_lufs(y, sr):
     与 dBFS 的区别：dBFS 是数字满刻度能量，对 2–4 kHz 以上不敏感；
     LUFS 做 K 加权（高架 + 高通），更接近人耳听到的“多响”。
     同一段弱奏钢琴，dBFS 可能 −52，LUFS 只低十几——这就是那条评论说的差距。
+
+    2026-10-28 按 BS.1770 修正（issue #1）：
+      - 多声道要逐声道求均方功率再求和（G=1），不能先混成单声道再算——
+        立体声左右接近时，混 mono 会低 3 dB；
+      - 补上第二道相对门限（比初步均值低 10 LU 以上的块不参与）。
     """
     from scipy.signal import lfilter
 
+    y = np.asarray(y, dtype=float)
+    if y.ndim == 1:
+        y = y[None, :]                     # (1, n)
     if sr != 48000:
-        y = librosa.resample(y, orig_sr=sr, target_sr=48000)
+        y = np.stack([librosa.resample(ch, orig_sr=sr, target_sr=48000) for ch in y])
         sr = 48000
     # Stage 1：高架（+4 dB @ 1.5k 附近）
     b1 = [1.53512485958697, -2.69169618940638, 1.19839281085285]
     a1 = [1.0, -1.69065929318241, 0.73248077421585]
-    y = lfilter(b1, a1, y)
     # Stage 2：高通（RLB）
     b2 = [1.0, -2.0, 1.0]
     a2 = [1.0, -1.99004745483398, 0.99007225036621]
-    y = lfilter(b2, a2, y)
+    # 逐声道滤波（多声道不能一维直滤）
+    y = np.stack([lfilter(b2, a2, lfilter(b1, a1, ch)) for ch in y])
 
     block = int(0.4 * sr)
     hop = int(0.1 * sr)
-    if len(y) < block:
+    if y.shape[1] < block:
         return float("nan")
-    ms = np.array([float(np.mean(y[i:i + block] ** 2))
-                   for i in range(0, len(y) - block + 1, hop)])
+    # 每声道均方功率 → 按声道求和（BS.1770 的 G 都是 1）
+    ms = np.array([float(np.sum(np.mean(y[:, i:i + block] ** 2, axis=1)))
+                   for i in range(0, y.shape[1] - block + 1, hop)])
     ms = ms[ms > 0]
     if len(ms) == 0:
         return float("nan")
-    # 绝对门限 −70 LUFS：静音块不参与平均
+    # 第一道：绝对门限 −70 LUFS
     lk = -0.691 + 10 * np.log10(ms)
     ms = ms[lk > -70]
     if len(ms) == 0:
         return float("nan")
+    # 第二道：相对门限，比初步均值低 10 LU 以上的块剔掉
+    lk = -0.691 + 10 * np.log10(ms)
+    rel = -0.691 + 10 * np.log10(float(np.mean(ms))) - 10.0
+    keep = ms[lk > rel]
+    if len(keep) > 0:
+        ms = keep
     return float(-0.691 + 10 * np.log10(np.mean(ms)))
 
 
@@ -2977,7 +2992,14 @@ def main():
     # 峰值高只说明电平高(波形仍光滑),真削波是波形被削平、大量点卡在 1.0。
     peak_db = 20 * np.log10(float(np.max(np.abs(y))) + 1e-12)
     rms_db = 20 * np.log10(float(np.sqrt(np.mean(y ** 2))) + 1e-12)
-    lufs = integrated_lufs(y, sr)
+    # LUFS 要按声道算（2026-10-28 修，issue #1）：单独读一份立体声。
+    # mono=True 已经把 y 混成单声道了，拿它算会比立体声低约 3 dB。
+    try:
+        _yl = librosa.load(args.path, sr=None, mono=False,
+                           offset=offset, duration=duration)[0]
+        lufs = integrated_lufs(_yl, sr)
+    except Exception:  # noqa: BLE001
+        lufs = integrated_lufs(y, sr)
     # 开头 16 秒的谱平坦度：用来区分「真的空」和「只是轻」——
     # 静音是平的（flatness 0.5+），弱奏有峰（0.01–0.06），中段更集中（<0.001）。
     _head = y[:int(16 * sr)] if len(y) > int(16 * sr) else y
@@ -3046,6 +3068,9 @@ def main():
         stems = analyze_stems(args.path, rms_db, model=_model, want_pitch=args.pitch)
         if not stems.get("available"):
             print(f"[分轨] 跳过: {stems.get('reason')}", file=sys.stderr)
+            # 同时进 stdout —— 插件只回传 stdout，只写 stderr 的话用户什么都看不到（issue #2）
+            print(f"[分轨] 未启用: {stems.get('reason')}"
+                  "（需要分轨组件；在 DSH 里运行 /audio-install-stems 安装）")
 
     # ---- 歌词听写(可选组件;失败不影响主分析)----
     # 会再分离一次人声轨(与 --stems 不共用);慢是慢,但失败时主分析照常出结果。
@@ -3057,6 +3082,8 @@ def main():
         asr = analyze_lyrics(args.path, model=args.asr)
         if not asr.get("available"):
             print(f"[听写] 跳过: {asr.get('reason')}", file=sys.stderr)
+            print(f"[听写] 未启用: {asr.get('reason')}"
+                  "（需要听写组件；在 DSH 里运行 /audio-install-asr 安装）")
 
     # ---- 结构化输出(插件调用用)----
     # 严格只整理已有结果:不新增算法、不引入依赖。
@@ -3167,6 +3194,8 @@ def main():
                 "loudness": {
                     "peak_dbfs": round(peak_db, 2),
                     "rms_dbfs": round(rms_db, 2),
+                    "lufs": (round(float(lufs), 2)
+                             if lufs is not None and np.isfinite(lufs) else None),
                     "over_scale_samples": over_scale,
                     "near_full_scale_samples": near_full,
                     "plateau_runs": plateau_runs,
