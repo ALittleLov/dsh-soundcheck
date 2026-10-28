@@ -1,6 +1,6 @@
 {
   "name": "dsh-soundcheck",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Local music analysis for DSH: audio -> a short human-readable verdict",
   "type": "module",
   "main": "lib/index.js",
