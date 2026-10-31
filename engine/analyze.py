@@ -2297,8 +2297,8 @@ def _track_relations(block_db, activity_blocks=None, min_delta=3.0, max_sync=2):
                 _cand.append((t0, t1, d, v0, v1, i))
         if not _cand:
             continue
-        # 每轨最多 2 升 + 2 降。只取最大那一条时，同一轨里后来的事件会被挤掉：
-        # 拉古拉古 1:03 萨顶顶开唱（人声升 6.4 dB）就被 0:53 念经进来（升 36）挤没了（2026-10-31）。
+        # 每轨最多 3 升 + 3 降（进候选池）。只取最大那一条时，同一轨里后来的事件会被挤掉：
+        # 实测某首歌 1:03 的人声升 6.4 dB，被 0:53 的升 36 dB 挤没（2026-10-31）。
         _ups = sorted([x for x in _cand if x[2] > 0], key=lambda x: -x[2])[:3]
         _dns = sorted([x for x in _cand if x[2] < 0], key=lambda x: x[2])[:3]
         for _x in _ups + _dns:
