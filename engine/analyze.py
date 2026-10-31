@@ -2251,6 +2251,126 @@ def _four_dims(d):
             + "（明暗=谱质心，快慢=BPM，强弱=RMS，冷暖=调式；区间推断，不是测量值）")
 
 
+def _track_relations(block_db, activity_blocks=None, min_delta=3.0, max_sync=2):
+    """逐轨、双向：每轨最大的一次单块变化，外加多轨同步和密度。
+
+    2026-10-29（清单 25 实验）：按轨求和会把单轨事件吃掉 —— 吉他降 3 dB 被鼓 +2、
+    贝斯 +2.5 抵消，合成几乎不动，于是"谁退场"就漏了。所以这里只给单轨，绝不合并成「伴奏」。
+    另外只抓"进入"、不抓"退出"也会漏（人声退场整段消失）。两个方向都报。
+
+    2026-10-31（Queen 逐段核对）加两条：
+    - `drums` 轨其实是"鼓组"（底鼓+军鼓+镲），措辞改「打击组」——用户听到 0:32 是镲，
+      插件却写「鼓 升 52 dB」，属于说错。
+    - bass 轨要和 mix 低频交叉验证：实测出现过 bass 轨降 3.6 dB、同时 mix 低频没动
+      （70.3→70.8）的情况，那是分轨串音/漂移，不是贝斯真退了。
+
+    数据不足时返回空列表——沉默优于乱报。
+    """
+    if not block_db:
+        return []
+    ZH = {"drums": "打击组", "bass": "贝斯", "other": "其他", "vocals": "人声",
+          "guitar": "吉他", "piano": "钢琴"}
+    mix_low = {}
+    for b in (activity_blocks or []):
+        s = b.get("start_sec")
+        bd = b.get("band_db") or []
+        if s is not None and bd:
+            mix_low[round(s)] = bd[0]   # B1 = 30–120 Hz
+    names = [n for n in ("vocals", "other", "bass", "drums", "guitar", "piano")
+             if block_db.get(n)]
+    if not names:
+        return []
+    picks = []
+    for n in names:
+        vals = [(b.get("start_sec"), b.get("db")) for b in block_db[n]
+                if b.get("start_sec") is not None and b.get("db") is not None]
+        if len(vals) < 3:
+            continue
+        # 尾部塌陷交给 [时间线]/[能量]，这里留给"中间谁进谁退"——
+        # 否则 -80 dB 的收尾会挤掉所有 5–10 dB 的编曲变化（2026-10-29）。
+        if len(vals) > 6:
+            vals = vals[:-2]
+        _cand = []
+        for i, ((t0, v0), (t1, v1)) in enumerate(zip(vals, vals[1:])):
+            d = v1 - v0
+            if abs(d) >= min_delta:
+                _cand.append((t0, t1, d, v0, v1, i))
+        if not _cand:
+            continue
+        # 每轨最多 2 升 + 2 降。只取最大那一条时，同一轨里后来的事件会被挤掉：
+        # 拉古拉古 1:03 萨顶顶开唱（人声升 6.4 dB）就被 0:53 念经进来（升 36）挤没了（2026-10-31）。
+        _ups = sorted([x for x in _cand if x[2] > 0], key=lambda x: -x[2])[:3]
+        _dns = sorted([x for x in _cand if x[2] < 0], key=lambda x: x[2])[:3]
+        for _x in _ups + _dns:
+            picks.append((n, _x))
+    picks.sort(key=lambda x: -abs(x[1][2]))
+    # 先保证每条轨至少有一条（否则 52 dB 的人声会把 4 dB 的「其他」挤掉，
+    # 而吉他/钢琴恰恰在 other 轨里），再按绝对值补剩下的（2026-10-29）。
+    # 每轨先保 2 条（否则大事件会占满名额，人声 6.4 dB 这种被挤到第 11 位），再按绝对值补。
+    ordered, _cnt = [], {}
+    for item in picks:
+        _n = item[0]
+        if _cnt.get(_n, 0) < 2:
+            ordered.append(item)
+            _cnt[_n] = _cnt.get(_n, 0) + 1
+    ordered += [it for it in picks if it not in ordered]
+    lines = []
+    for n, (t0, t1, d, v0, v1, _i) in ordered[:12]:
+        _note = ""
+        # bass 轨和 mix 低频交叉验证：轨降了、mix 低频没降 → 不是贝斯真退（2026-10-31）
+        if n == "bass" and mix_low:
+            _a, _b = round(t0), round(t1)
+            if _a in mix_low and _b in mix_low:
+                _m = mix_low[_b] - mix_low[_a]
+                if abs(d) >= 3 and abs(_m) < 1.0:
+                    _note = f"，mix 低频几乎没动（{_m:+.1f} dB）—— 分轨存疑"
+                elif abs(d) >= 3 and (np.sign(_m) != np.sign(d)) and abs(_m) >= 1.0:
+                    _note = f"，但 mix 低频 {_m:+.1f} dB（方向相反）—— 分轨存疑"
+        lines.append(f"{ZH.get(n, n)} {'升' if d > 0 else '降'} {abs(d):.0f} dB"
+                     f"（{fmt_time(t0)}→{fmt_time(t1)}，{v0:.0f}→{v1:.0f}{_note}）")
+    idx = {n: {round(b.get("start_sec", 0)): b.get("db") for b in block_db[n]}
+           for n in names}
+    starts = sorted({s for n in names for s in idx[n]})
+    sync = []
+    tail_starts = set(starts[-2:])
+    for a, b in zip(starts, starts[1:]):
+        # 和上面同理：尾部塌陷不进"多轨同步"，否则整首只剩「8:48 全灭」这一条（2026-10-29）。
+        if b in tail_starts:
+            continue
+        if not all(a in idx[n] and b in idx[n] for n in names):
+            continue
+        ds = {n: idx[n][b] - idx[n][a] for n in names}
+        up = [n for n in names if ds[n] >= 2]
+        dn = [n for n in names if ds[n] <= -2]
+        if len(up) >= 3:
+            sync.append(f"{fmt_time(b)} 起同时升：" +
+                        "、".join(f"{ZH.get(n, n)}{ds[n]:+.0f}" for n in up))
+        elif len(dn) >= 3:
+            sync.append(f"{fmt_time(b)} 起同时降：" +
+                        "、".join(f"{ZH.get(n, n)}{ds[n]:+.0f}" for n in dn))
+    if sync:
+        lines.append("多轨同步（≥3 轨同向、各 ≥2 dB）：" + "；".join(sync[:max_sync]))
+    # 密度（mix 的起音数，不是单轨的）：用户听"变快"常常是音变密，不是拍变快（2026-10-31）。
+    _o = [(b.get("start_sec"), b.get("onsets")) for b in (activity_blocks or [])
+          if b.get("start_sec") is not None and b.get("onsets")]
+    if len(_o) > 6:
+        _o = _o[:-2]
+    _best = None
+    for (t0, o0), (t1, o1) in zip(_o, _o[1:]):
+        if not o0 or not o1:
+            continue
+        r = o1 / o0
+        if r >= 1.4 or r <= 0.7:
+            score = abs(np.log2(r))
+            if _best is None or score > _best[0]:
+                _best = (score, t0, t1, o0, o1, r)
+    if _best:
+        _, t0, t1, o0, o1, r = _best
+        lines.append(f"密度{'翻倍' if r > 1 else '腰斩'}：起音 {o0:.0f}→{o1:.0f} 次/块"
+                     f"（{fmt_time(t0)}→{fmt_time(t1)}）—— 这是音变密/变疏，不是拍速变了")
+    return lines
+
+
 def _vocal_activity_link(stems, min_blocks=8):
     """B3：唱得越密，伴奏是不是也越满。（不依赖 ASR）
 
@@ -2533,7 +2653,9 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
             near = c["i"] - g["end"] <= 2
             same_dir = (np.sign(c["de"]) == np.sign(g["de"]) or
                         np.sign(c["da"]) == np.sign(g["da"]))
-            if near and same_dir and not c["vch"]:
+            # 跨度上限 3 块（48 秒）：没有上限时，「起音一路下降」就能把整首歌并成一个组，
+            # 于是「0:16 升、4:32 才塌」被写成「0:16 变轻、能量 -19→-48」（2026-10-29 修）。
+            if near and same_dir and not c["vch"] and (c["i"] - g["start"]) <= 3:
                 g["end"] = c["i"]
                 g["de"] += c["de"]
                 g["da"] += c["da"]
@@ -2643,7 +2765,13 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
             _act = "换人声"
         else:
             continue
-        parts = [f"{_act}（{_vals}）"]
+        # 长过程（≥3 块）不能写成一次突变：整首缓慢渐变的歌会被合并成一个几十秒甚至几分钟的大组，
+        # 再用首尾差描述，读起来像「那一刻掉了 29 dB」。2026-10-29 修（Beck/Beastie/Queen 三首实测）。
+        _long = (i1 - i0) >= 3
+        if _long:
+            parts = [f"起持续：{_act}（{_vals}），到 {fmt_time(t0[min(i1, n - 1)])} 共 {span:.0f} 秒"]
+        else:
+            parts = [f"{_act}（{_vals}）"]
         if _louds and _act.startswith("只是"):
             parts.append("、".join(
                 f"{ZH.get(c[0], c[0])}{c[1]} {c[2]:.0f} dB" for c in _louds[:2]))
@@ -2663,7 +2791,7 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
             if "没有稳定基频" not in _act and _vtxt not in _act:
                 parts.append(_vtxt)
         _band_txt = _band_shift_text(_mixes, _dbs, e, i0, i1, n)
-        tail = f"，该状态持续 {span:.0f} 秒" if span >= 32 else ""
+        tail = "" if _long else (f"，该状态持续 {span:.0f} 秒" if span >= 32 else "")
         # 时间细化不做（2026-10-27）：三种窗口方案都试过，偏移只从 ±16 秒收敛到 ±8 秒，
         # 根因是混音能量里还有别的乐器 —— 用混音找「鼓撤」的精确时刻本来就不准。
         # 要准只能用鼓轨，但分轨是 16 秒粒度。块级精度对段落级描述够用。
@@ -2823,7 +2951,9 @@ def verdict_lines(d):
                          f"{fmt_time(blocks[k + 1][0])} 才回来 —— 这是最明显的一次反差。")
         elif rises:
             k = int(max(rises, key=lambda i: delta[i]))
-            lines.append(f"{fmt_time(blocks[k + 1][0])} 进来,是最响的地方。")
+            # 只保证「最大的一次抬升」，不保证「全曲最响」——Beck 实测 0:16 抬 4.7 dB，
+            # 全曲最响在 3:44（2026-10-29 修）。
+            lines.append(f"{fmt_time(blocks[k + 1][0])} 最大的一次抬升，抬了 {delta[k]:.0f} dB。")
 
     # 7) 收尾
     if len(es) >= 2:
@@ -2916,6 +3046,12 @@ def verdict_lines(d):
             else:
                 out.append(f"       人声轨只占 {vv['ratio'] * 100:.3f}%,更像器乐"
                            "（分轨会漏、也会串，这条只能当线索）")
+    # 逐轨关系（2026-10-29，清单 25 实验）：只给单轨变化，不给「伴奏」合并值。
+    # 理由：单轨事件会被三轨求和吃掉（吉他降 3 dB 被鼓 +2、贝斯 +2.5 抵消，事件就漏了）。
+    _tr = _track_relations((d.get("stems") or {}).get("block_db"), ab)
+    if _tr:
+        out.append("[逐轨] 各轨最大的一次变化（单轨，不做和；块粒度 16 秒）")
+        out.extend("       " + ln for ln in _tr)
     # 歌词听写(可选组件):机器听写,只列可信段;疑幻觉段连内容都不给。
     asr = d.get("asr")
     _inst = ((asr or {}).get("instrumental")
@@ -3556,6 +3692,19 @@ def main():
             if pts:
                 s = ", ".join(f"{fmt_time(blocks[j + 1][0])}({d[j]:.0f}dB)" for j in pts)
                 print(f"[SEG]  变化最大的段落边界: {s}")
+
+    # ---- 乐器候选（2026-10-29 补）----
+    # 默认报告的 [乐器] 段一直没进 --detail，两条输出路径不一致（同类问题第三次）。
+    _ins = (sources or {}).get("instruments") or []
+    if _ins:
+        _parts = []
+        for _i in _ins:
+            _sp = _i.get("spans") or []
+            _sp_txt = ("，如 " + "、".join(f"{fmt_time(a)}–{fmt_time(b)}"
+                                          for a, b in _sp[:2])) if _sp else ""
+            _parts.append(f"{_i['name']}（{_i['seconds']:.0f} 秒 / {_i['segments']} 段{_sp_txt}）")
+        print(f"[乐器] 可能有 {'、'.join(_parts)} —— 从混音里猜的，漏报比误报多，别当配器清单")
+        print()
 
     # ---- 声源/乐器(可选增强)----
     if sources and sources.get("available"):
