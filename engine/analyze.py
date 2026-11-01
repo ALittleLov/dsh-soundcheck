@@ -202,7 +202,7 @@ def detect_tempo_beatthis(y, sr):
     整首按 30 秒分块 —— Transformer 的 attention 对长序列会吃掉大量内存。
 
     经验:它能解决 librosa 的倍频锁错 ——
-    《月之暗面》69.8(真值 69)、November Rain 78.9(真值约 80),
+    某首经验曲 69.8(真值 69)、另一首 78.9(真值约 80),
     而 librosa 分别报 139.7 / 156.6。
     """
     model_dir = _beatthis_model_dir()
@@ -781,7 +781,7 @@ def format_bands(rows):
     return lines
 
 
-def activity_timeline(y, sr, block_sec=16.0, hop=1024):
+def activity_timeline(y, sr, block_sec=16.0, hop=1024, sections=None):
     """
     编曲活动度 —— 和「电平」分开的另一个维度。
 
@@ -826,16 +826,22 @@ def activity_timeline(y, sr, block_sec=16.0, hop=1024):
         "spectral_flux": round(flux, 4),
     }
 
-    # 分块:让「活动度」也能看时间变化,好和电平曲线对照
-    per = max(1, int(block_sec * sr / hop))
+    # 分块：有结构段时按段聚合（段长不一，和能量曲线逐段对齐），否则固定秒数。
+    # 结构段的边界是「音乐位置」，固定块是「时间刻度」—— 下游要和 [结构] 对齐必须同源。
+    if sections:
+        ranges = [(int(round(s["start_sec"] * sr / hop)),
+                   int(round(s["end_sec"] * sr / hop))) for s in sections]
+    else:
+        per = max(1, int(block_sec * sr / hop))
+        ranges = [(i, i + per) for i in range(0, S.shape[1], per)]
     blocks = []
-    for i in range(0, S.shape[1], per):
-        seg = S_norm[:, i:i + per]
-        if seg.shape[1] < 2:
+    for lo_f, hi_f in ranges:
+        lo_f = max(0, int(lo_f))
+        hi_f = min(S.shape[1], int(hi_f))
+        if hi_f - lo_f < 2:
             continue
+        seg = S_norm[:, lo_f:hi_f]
         # 本块内有起音吗(用 onset 帧号落在本块的比例近似密度)
-        lo_f = i
-        hi_f = i + per
         n_on = int(np.sum((onsets >= lo_f) & (onsets < hi_f)))
         seg_flux = float(np.mean(np.sqrt(np.sum(np.diff(seg, axis=1) ** 2, axis=0))))
         # 本块的频带占比
@@ -850,7 +856,7 @@ def activity_timeline(y, sr, block_sec=16.0, hop=1024):
                 seg_e.append(0.0)
                 seg_p.append(0.0)
                 continue
-            _sub = S[m, i:i + per]
+            _sub = S[m, lo_f:hi_f]
             seg_e.append(float(_sub.mean()))
             seg_p.append(float(np.sum(_sub ** 2)))
         se = np.array(seg_e)
@@ -1078,6 +1084,204 @@ def energy_blocks(rms_db, sr, hop, block_sec):
         if len(seg) == 0:
             continue
         out.append((i * hop / sr, (i + len(seg)) * hop / sr, float(seg.mean())))
+    return out
+
+
+# ── 结构切段──
+#
+# 为什么不再用固定 16 秒块：固定块的边界是「文件的时间刻度」，不是「音乐的位置」。
+# 段落长度从 8 秒到 2 分钟不等，16 秒块会把一个段落切进两块，也会让两段共享一块；
+# 于是「第 3 块变响」这种话永远对不上听感里的「进副歌」。
+#
+# 方法：mel 谱自相似 + 多尺度 novelty + 持续性过滤。不用分类器、不加载模型，
+
+# （容差 3 秒，F1≈0.71）；强度分档的命中率在 52%（fused 0.7–0.8）到 72%（0.8+）之间，
+# 所以 0.8 以上叫「强边界」，以下的只进 JSON、不进正文分段。
+
+_STRUCT_SCALES = (3.0, 6.0, 12.0)
+_STRUCT_WEIGHTS = (0.25, 0.5, 0.25)
+_STRUCT_CAND_THR = 0.6      # 候选阈值（MAD 归一化后的 fused 值）
+_STRUCT_STRONG_THR = 0.8    
+_STRUCT_MIN_GAP = 10.0      # 两个边界的物理最小间隔（秒）
+_STRUCT_MIN_SEG = 6.0       # 段最短长度（秒），防边缘碎段
+
+
+def _mel_filterbank(sr, n_fft, n_mels=80, fmin=40.0, fmax=None):
+    """三角 mel 滤波器组；参数与验证时一致。"""
+    fmax = fmax or sr / 2.0
+    freqs = np.linspace(0, sr / 2.0, n_fft // 2 + 1)
+    pts = 700.0 * (10 ** (np.linspace(
+        2595.0 * np.log10(1.0 + fmin / 700.0),
+        2595.0 * np.log10(1.0 + fmax / 700.0), n_mels + 2) / 2595.0) - 1.0)
+    fb = np.zeros((n_mels, len(freqs)))
+    for i in range(n_mels):
+        lo, mid, hi = pts[i], pts[i + 1], pts[i + 2]
+        fb[i] = np.maximum(0.0, np.minimum((freqs - lo) / (mid - lo + 1e-9),
+                                           (hi - freqs) / (hi - mid + 1e-9)))
+    return fb
+
+
+def _structure_mel(y, sr):
+    """音频 → log1p(power-mel,80)。参数与验证时一致。"""
+    n_fft, hop = 2048, 512
+    # 用 librosa.stft 做 C 加速，mel 矩阵自己乘 —— 与验证脚本是同一套算法。
+    # center=False 保持和验证时的帧对齐一致（从 0 开始逐 hop 取窗）。
+    S = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop,
+                            window="hann", center=False)) ** 2
+    return np.log1p(_mel_filterbank(sr, n_fft) @ S), sr / hop
+
+
+def _structure_from_mel(mel, fps):
+    """mel(80) + 帧率 → 帧特征矩阵与 ~8 fps 的降采样帧率。
+
+    拆成独立一步是为了可复验：benchmark 用的是数据集预计算的 mel，
+    不需要重跑音频，直接用同一函数就能对齐试验数字。
+    """
+    step = max(1, int(round(fps / 8.0)))
+    f = mel[:, ::step].T
+    f = (f - f.mean(0)) / (f.std(0) + 1e-8)
+    return f, fps / step
+
+
+def _novelty_from_sim(sim, L):
+    """Foote novelty：块内相似度均值 − 跨边界相似度均值。sim 只算一次，三个尺度共用。"""
+    n = sim.shape[0]
+    nov = np.zeros(n)
+    if L < 1 or n < 2 * L + 2:
+        return nov
+    for t in range(L, n - L):
+        a = sim[t - L:t, t - L:t].mean()
+        b = sim[t:t + L, t:t + L].mean()
+        c = sim[t - L:t, t:t + L].mean()
+        d = sim[t:t + L, t - L:t].mean()
+        nov[t] = (a + b) / 2.0 - (c + d) / 2.0
+    return nov
+
+
+def _mad_normalize(x):
+    """中位数/MAD 归一化到 [0,1]；比 min-max 稳，长尾不会把大部分压到 0。"""
+    med = np.median(x)
+    mad = np.median(np.abs(x - med)) + 1e-9
+    return (np.clip((x - med) / (1.4826 * mad), -3.0, 3.0) + 3.0) / 6.0
+
+
+def _offdiag_mean(m):
+    """块内相似度均值，排除对角线 ±2 帧（邻近帧天然高相似，会把值抬虚）。"""
+    if m.shape[0] < 5:
+        return 0.0
+    n = m.shape[0]
+    band = np.eye(n, k=0, dtype=bool)
+    for d in range(1, 3):
+        band |= np.eye(n, k=d, dtype=bool)
+        band |= np.eye(n, k=-d, dtype=bool)
+    m2 = m[~band]
+    return float(m2.mean()) if len(m2) else 0.0
+
+
+def _persistence(sim, t, fps):
+    """变化持续性 C = (H_L + H_R)/2 − S_LR。
+
+    高 = 左右各自稳定、彼此不同（真段落边界）；
+    低 / 负 = 两边本来就相似（过门、渐变、段落内部的局部变化）。
+    这是把「切点」和「段落边界」分开的关键：单看 novelty 只能看到「变了」，
+    看不到「变完有没有稳定下来」。
+    """
+    n = sim.shape[0]
+    w = max(2, int(round(6.0 * fps)))
+    gap = max(1, int(round(2.0 * fps)))
+    l0, l1 = max(0, t - w), max(1, t - gap)
+    r0, r1 = min(n - 1, t + gap), min(n, t + gap + w)
+    if l1 - l0 < 4 or r1 - r0 < 4:
+        return 0.0
+    h_l = _offdiag_mean(sim[l0:l1, l0:l1])
+    h_r = _offdiag_mean(sim[r0:r1, r0:r1])
+    s_lr = float(sim[l0:l1, r0:r1].mean())
+    return (h_l + h_r) / 2.0 - s_lr
+
+
+def detect_structure(y, sr):
+    """按内容切段。返回 {cuts, sections, strong_count, method, ...} 或 None。
+
+    cuts     : 全部候选边界（含强度 strength 与持续性 persist，strong=是否强边界）
+    sections : 正文用的分段，由强边界（fused ≥ 0.8）划定；强边界不足 3 个时退全候选。
+    不做段落命名 —— 只报「这里有一条边界、它有多强」，角色（主歌/副歌）是另一层推断。
+    """
+    dur = len(y) / sr
+    if dur < 45.0:              # 太短：结构检测不可靠，交回固定块
+        return None
+    mel, mel_fps = _structure_mel(y, sr)
+    f, fps = _structure_from_mel(mel, mel_fps)
+    n = f.shape[0]
+    if n < 2 * int(round(_STRUCT_SCALES[-1] * fps)) + 4:
+        return None
+    fn = f / (np.linalg.norm(f, axis=1, keepdims=True) + 1e-9)
+    sim = fn @ fn.T
+    zs = [_mad_normalize(_novelty_from_sim(sim, max(1, int(round(L * fps)))))
+          for L in _STRUCT_SCALES]
+    m = min(len(z) for z in zs)
+    fused = sum(w * z[:m] for w, z in zip(_STRUCT_WEIGHTS, zs))
+
+    sep_f = max(1, int(round(_STRUCT_MIN_GAP * fps)))
+    peaks = []
+    for idx in np.argsort(fused)[::-1]:
+        if fused[idx] < _STRUCT_CAND_THR:
+            break
+        if all(abs(idx - p) >= sep_f for p in peaks):
+            peaks.append(int(idx))
+    peaks.sort()
+
+    cuts = []
+    for p in peaks:
+        t = p / fps
+        if t < 1.0 or t > dur - 1.0:
+            continue
+        c = _persistence(sim, p, fps)
+        if c < 0.0:             # 跨边界相似度不低于内部 —— 不是真边界
+            continue
+        cuts.append({"time_sec": round(float(t), 2),
+                     "strength": round(float(fused[p]), 3),
+                     "persist": round(float(c), 3),
+                     "strong": bool(fused[p] >= _STRUCT_STRONG_THR)})
+
+    strong = [c["time_sec"] for c in cuts if c["strong"]]
+    tier = "strong"
+    if len(strong) < 3:         # 强边界太少（短歌/电子循环曲）→ 用全部候选保底
+        strong = [c["time_sec"] for c in cuts]
+        tier = "all"
+
+    sections = []
+    prev = 0.0
+    for t in strong + [dur]:
+        if t - prev < _STRUCT_MIN_SEG:
+            continue
+        sections.append({"start_sec": round(prev, 2),
+                         "end_sec": round(float(t), 2),
+                         "duration_sec": round(float(t - prev), 2)})
+        prev = t
+    if len(sections) < 2:
+        return None
+    return {"cuts": cuts,
+            "sections": sections,
+            "strong_count": sum(1 for c in cuts if c["strong"]),
+            "tier": tier,
+            "kind": "acoustic_change_segments",
+            "note": ("声学状态变化的区间，不等同于主歌/副歌/乐句；"
+                     "连续演唱或演奏活动内部可能被切开"),
+            "method": "mel80+novelty(3/6/12s)+persist",
+            "boundary_tolerance_sec": 3.0,
+            "min_gap_sec": _STRUCT_MIN_GAP}
+
+
+def structure_energy_blocks(rms_db, sr, hop, sections):
+    """按结构段的边界聚合能量；段内取 dB 均值，与固定块口径一致。"""
+    out = []
+    n = len(rms_db)
+    for s in sections:
+        i0 = max(0, int(round(s["start_sec"] * sr / hop)))
+        i1 = min(n, int(round(s["end_sec"] * sr / hop)))
+        if i1 <= i0:
+            continue
+        out.append((s["start_sec"], s["end_sec"], float(np.mean(rms_db[i0:i1]))))
     return out
 
 
@@ -1533,12 +1737,12 @@ def _instrumental_ranges(mono, sr, block_sec=4.0, min_sec=8.0, delta_db=35.0,
 
     判据用**绝对能量 + 自适应阈值**,不用「人声占伴奏比」:
     占比会被伴奏强度稀释,鼓一响人声占比就掉,会被误读成「人声消失」。
-    经验《拉古拉古》112s:人声 -31.8 dBFS 仍在唱,但鼓涨到 -18.9,
+    经验某首曲目 112s:人声 -31.8 dBFS 仍在唱,但鼓涨到 -18.9,
     占比只剩 3.8%,按占比会误标成器乐段。
 
     阈值不写死:先去掉明显静音块,取人声电平中位数再下沉 delta_db。
     不同曲目的增益水平差得很大(母带压限 vs 手机录音),固定阈值会在
-    响度低的曲目上失效。中位数-35 对《拉古拉古》正好落在 -60 附近,
+    响度低的曲目上失效。中位数 -35 对某首经验曲正好落在 -60 附近,
     与经验吻合。
     """
     win = max(1, int(block_sec * sr))
@@ -1997,8 +2201,8 @@ def bpm_layers(tempo):
     """给出两个倍频层级:检测值本身 + 最近的倍频(×2 或 ÷2)。
 
     **不判断哪个是「真速」**——经验两个方向都会错:
-      November Rain 官方约 80,检测 156.6(约两倍)
-      《月之暗面》网易云 69,检测 139.7(约两倍)
+      某首摇滚曲官方约 80,检测 156.6(约两倍)
+      另一首经验曲 69,检测 139.7(约两倍)
       用户反馈的摇滚报 80、听感 160(约一半)
     所以只把两层摆出来,由听的人按自己的数拍方式判断。
     """
@@ -2016,7 +2220,7 @@ def pitch_summary(y, sr, fmin=120.0, fmax=1200.0):
     """pyin 基频追踪 → 音域 / 有声占比。只在 --pitch 时跑。
 
     **必须先高通 150 Hz**：混音里贝斯能量最强，pyin 会追到底鼓/贝斯的基频，不是旋律。
-    经验 Queen 60–90s：不滤波给 C2–G2（7.1 半音，那是贝斯），高通后给 C3–A3（8.9 半音）。
+    经验某首多轨曲目 60–90s：不滤波给 C2–G2（7.1 半音，那是贝斯），高通后给 C3–A3（8.9 半音）。
 
     ⚠ 它不知道这条轨迹是谁的 —— 混音里可能是人声，也可能是钢琴、弦乐或合成器。
        调用方必须标注来源，否则等于骗人。
@@ -2258,7 +2462,7 @@ def _track_relations(block_db, activity_blocks=None, min_delta=3.0, max_sync=2):
     贝斯 +2.5 抵消，合成几乎不动，于是"谁退场"就漏了。所以这里只给单轨，绝不合并成「伴奏」。
     另外只抓"进入"、不抓"退出"也会漏（人声退场整段消失）。两个方向都报。
 
-    （Queen 逐段核对）加两条：
+    （某首多轨曲目逐段核对）加两条：
     - `drums` 轨其实是"鼓组"（底鼓+军鼓+镲），措辞改「打击组」——用户听到 0:32 是镲，
       插件却写「鼓 升 52 dB」，属于说错。
     - bass 轨要和 mix 低频交叉验证：经验出现过 bass 轨降 3.6 dB、同时 mix 低频没动
@@ -2767,7 +2971,9 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
             continue
         # 长过程（≥3 块）不能写成一次突变：整首缓慢渐变的歌会被合并成一个几十秒甚至几分钟的大组，
         
-        _long = (i1 - i0) >= 3
+        # 长过程：跨 >=3 个块，或总时长 >=72 秒。结构段块长不一，
+        # 只看块数会把「两段跨 90 秒」写成一次突变。
+        _long = (i1 - i0) >= 3 or span >= 72.0
         if _long:
             parts = [f"起持续：{_act}（{_vals}），到 {fmt_time(t0[min(i1, n - 1)])} 共 {span:.0f} 秒"]
         else:
@@ -2987,6 +3193,17 @@ def verdict_lines(d):
     out.append("[读法] 「推测/候选/可能」=推断；直接报数=测量；没提到=测不出来")
     out.append("[判断] " + lines[0])
     out.extend("       " + ln for ln in lines[1:])
+    # 结构分段：只报「边界在哪、每段多长/多响/多密」，
+    # 不给主歌/副歌这类角色 —— 边界是测量，角色是另一层推断，混在一起会被当成事实。
+    _struct = d.get("structure")
+    if _struct and _struct.get("sections"):
+        _secs = _struct["sections"]
+        _tier = "强边界" if _struct.get("tier") == "strong" else "全部候选"
+        out.append(f"[结构] 声学变化片段 {len(_secs)} 个（{_tier}，±3 秒；"
+                   f"不推断主歌/副歌）")
+        _cuts_txt = " / ".join(fmt_time(s["end_sec"]) for s in _secs[:-1])
+        if _cuts_txt:
+            out.append(f"       边界 {_cuts_txt}")
     # arousal 一行：由已有数字推得，中间态不输出（见 _arousal_line）
     _ar = _arousal_line(d)
     if _ar:
@@ -3050,7 +3267,8 @@ def verdict_lines(d):
     # 理由：单轨事件会被三轨求和吃掉（吉他降 3 dB 被鼓 +2、贝斯 +2.5 抵消，事件就漏了）。
     _tr = _track_relations((d.get("stems") or {}).get("block_db"), ab)
     if _tr:
-        out.append("[逐轨] 各轨最大的一次变化（单轨，不做和；块粒度 16 秒）")
+        _blk = "块粒度=结构段" if d.get("structure") else "块粒度 16 秒"
+        out.append(f"[逐轨] 各轨最大的一次变化（单轨，不做和；{_blk}）")
         out.extend("       " + ln for ln in _tr)
     # 歌词听写(可选组件):机器听写,只列可信段;疑幻觉段连内容都不给。
     asr = d.get("asr")
@@ -3083,7 +3301,8 @@ def verdict_lines(d):
         _bars = "▁▂▃▄▅▆▇█"
         _line = "".join(_bars[min(7, int((v - _lo) / _span * 7 + 0.5))] for v in _eb)
         _dur = d.get("dur") or (blocks[-1][1] if blocks else 0)
-        out.append(f"[能量] {_line}  （每格 16 秒，{fmt_time(0)}–{fmt_time(_dur)}，共 {len(_eb)} 格）")
+        _cell = "每格=一个结构段" if d.get("structure") else "每格 16 秒"
+        out.append(f"[能量] {_line}  （{_cell}，{fmt_time(0)}–{fmt_time(_dur)}，共 {len(_eb)} 格）")
 
     _tl = _timeline(ab, es, blocks, _inst,
                     (d.get("stems") or {}).get("block_db"),
@@ -3168,7 +3387,8 @@ def verdict_lines(d):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("path")
-    ap.add_argument("--blocks", type=float, default=16.0, help="能量分块秒数(默认 16)")
+    ap.add_argument("--blocks", type=float, default=None,
+                    help="能量分块秒数;不填=按内容切段(结构感知),填数字=固定块")
     ap.add_argument("--chord-block", type=float, default=2.0, help="和弦判定块秒数(默认 2)")
     ap.add_argument("--start", type=parse_time, default=None,
                     help="只分析从这个时间点开始的片段,接受秒或 1:30")
@@ -3257,6 +3477,22 @@ def main():
     dur = len(y) / sr
     section = offset > 0 or args.end is not None
 
+    # ---- 结构切段----
+    # 只在「整首、非预览、用户没显式指定 --blocks」时启用。
+    # 片段不做：短片段里「段落」没有意义，边界检测会把局部变化当结构。
+    structure = None
+    if (not section and preview_sec is None and args.blocks is None
+            and not args.bands):
+        try:
+            structure = detect_structure(y, sr)
+        except Exception as e:  # noqa: BLE001
+            print(f"[结构] 切段失败，回退固定 16 秒块：{e}", file=sys.stderr)
+        if structure:
+            print(f"[结构] {len(structure['cuts'])} 个候选边界"
+                  f"（强 {structure['strong_count']} 个）→ {len(structure['sections'])} 段",
+                  file=sys.stderr)
+    block_sec = args.blocks if args.blocks is not None else 16.0
+
     if args.bands:
         rows = analyze_bands(y, sr)
         print("[频段] 分频段诊断(能量 / 打击密度 / 规律性):")
@@ -3283,8 +3519,13 @@ def main():
         centroid = float(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)))
     except Exception:  # noqa: BLE001
         centroid = float("nan")
-    blocks = [(t0 + offset, t1 + offset, e)
-              for t0, t1, e in energy_blocks(rms_dbfs, sr, hop, args.blocks)]
+    if structure:
+        blocks = [(t0 + offset, t1 + offset, e)
+                  for t0, t1, e in structure_energy_blocks(
+                      rms_dbfs, sr, hop, structure["sections"])]
+    else:
+        blocks = [(t0 + offset, t1 + offset, e)
+                  for t0, t1, e in energy_blocks(rms_dbfs, sr, hop, block_sec)]
 
     # ---- 和弦:根音候选骨架(先算,[FIT] 要用它的差距)----
     chords = chord_analysis(chroma, sr, hop=hop, block_sec=args.chord_block,
@@ -3348,7 +3589,9 @@ def main():
     n_top = near_full          # 旧字段名保留,JSON 兼容
 
     # ---- 编曲活动度(与电平分开的另一个维度)----
-    activity, activity_blocks = activity_timeline(y, sr, block_sec=args.blocks, hop=hop)
+    activity, activity_blocks = activity_timeline(
+        y, sr, block_sec=block_sec, hop=hop,
+        sections=structure["sections"] if structure else None)
     for b in activity_blocks:
         b["start_sec"] = round(b["start_sec"] + offset, 1)
         b["end_sec"] = round(b["end_sec"] + offset, 1)
@@ -3528,7 +3771,10 @@ def main():
                      "mean_dbfs": round(e, 1)}
                     for t0, t1, e in blocks
                 ],
+                # 能量跳变（旧的 section_boundaries）与「按内容切段」是两件事：
+                # 前者是「这一块比上一块响了多少」，后者是「音乐换段了」。
                 "section_boundaries": bounds,
+                "structure": structure,
             },
             "chords": chords,
             "confidence": {
@@ -3543,7 +3789,8 @@ def main():
             "measurements": {
                 "sample_rate": int(sr),
                 "beat_count": int(n_beats),
-                "energy_block_sec": args.blocks,
+                "energy_block_sec": (None if structure else block_sec),
+                "structure_aware": bool(structure),
                 "chord_block_sec": args.chord_block,
                 "chord_blocks_total": int(chords["blocks_total"]),
             },
@@ -3582,6 +3829,7 @@ def main():
             "lufs": lufs, "head_flat": head_flat,
             "n_top": n_top, "over_scale": over_scale, "plateau_runs": plateau_runs,
             "es": es, "blocks": blocks, "activity_blocks": activity_blocks,
+            "structure": structure,
             "chords": chords, "fit": fit, "sources": sources, "activity": activity,
             "musicnn": musicnn, "stems": stems, "asr": asr,
             "offset": offset, "total_dur": total_dur,
@@ -3673,7 +3921,18 @@ def main():
           f" | 频谱变化率 {activity['spectral_flux']:.4f}"
           f"  (← 密度维度,与上面响度分开看)")
 
-    print(f"[FORM] 能量走势(每 {args.blocks:g} 秒一块,0 dBFS 为满刻度):")
+    if structure:
+        print(f"[STRUCT] 声学变化边界: {len(structure['cuts'])} 个候选,"
+              f"强 {structure['strong_count']} 个 → {len(structure['sections'])} 个片段"
+              f"（±3 秒;strong=强边界,weak=仅候选）")
+        print(f"  {'时间':>8}  {'强度':>6}  {'持续性':>7}  级别")
+        for c in structure["cuts"]:
+            print(f"  {fmt_time(c['time_sec']):>8}  {c['strength']:>6.3f}  "
+                  f"{c['persist']:>+7.3f}  {'strong' if c['strong'] else 'weak'}")
+
+    _form_head = ("能量走势(按结构段,0 dBFS 为满刻度):" if structure
+                  else f"能量走势(每 {block_sec:g} 秒一块,0 dBFS 为满刻度):")
+    print(f"[FORM] {_form_head}")
     for t0, t1, e in blocks:
         n = int(np.clip((e + 60) / 3.0, 0, 20))
         print(f"  {fmt_time(t0)}–{fmt_time(t1)}  {e:6.1f}dB  {'█' * n}")
@@ -3719,7 +3978,7 @@ def main():
             print(f"  [人声证据] max(Singing,Speech) 峰值 {_ve['peak']:.3f}"
                   f" @{fmt_time(_ve['peak_t'])} | p95 {_ve['p95']:.3f} → {_v}")
             # 「人声段」= 声源模型当门卫 + 相对电平当手电筒。
-            # 声源模型单独做不了定位：它是事件检测，Queen 的 p95 只有 0.09，
+            
             # 只有 4 秒超过 0.15。相对电平单独做不了判定：电子乐里 riser 也会被
             
             if _ve["verdict"] == "有":
