@@ -14,3 +14,7 @@ build/
 
 # dsh-ops 运行时锁文件
 .dsh-ops-update-*.lock
+
+# 运行期缓存与模型（不进仓库）
+engine/cache/
+engine/models/

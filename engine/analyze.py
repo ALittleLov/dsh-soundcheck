@@ -1382,7 +1382,7 @@ def analyze_stems(path, mix_rms_db, *, model="htdemucs", cache_dir=None, want_pi
     # 旧 json 里读不到新字段，于是全曲显示「最长连续 0.00 秒」——误以为是算法坏了，
     # 查到最后是缓存。凡是往缓存里加/改字段，都要动这个数字。
     # v9：加了 vocal_activity（B3 的 X），旧缓存里没这个字段。
-    raw_key = (f"{os.path.abspath(path)}|{st.st_size}|{int(st.st_mtime)}|{model}|v11")
+    raw_key = (f"{os.path.abspath(path)}|{st.st_size}|{int(st.st_mtime)}|{model}|v13-sr44")
     key = hashlib.sha1(raw_key.encode("utf-8")).hexdigest()[:16]
     cpath = os.path.join(root, f"{key}.json")
     if os.path.exists(cpath):
@@ -1419,6 +1419,20 @@ def analyze_stems(path, mix_rms_db, *, model="htdemucs", cache_dir=None, want_pi
                        cache_dir=model_dir, progress=False)
     except Exception as e:  # noqa: BLE001
         return {"available": False, "reason": f"分离失败: {e}"}
+
+    # 分轨输出是源文件原生采样率；下游全部按 44100 换算时间。
+    # 不统一的话，48k 源整体偏 8.8%，96k 源偏 117.7%。
+    try:
+        import soundfile as _sf0
+        _native_sr = int(_sf0.info(path).samplerate)
+    except Exception:
+        _native_sr = 44100
+    if _native_sr != 44100:
+        try:
+            res = {_k0: _to_44100(_v0, _native_sr) for _k0, _v0 in res.items()}
+            print(f"[分轨] 源 {_native_sr} Hz，已统一重采样到 44100", file=sys.stderr)
+        except Exception as _e0:  # noqa: BLE001
+            print(f"[分轨] 重采样失败，时间轴可能偏移: {_e0}", file=sys.stderr)
 
     out = {"available": True, "model": model,
            "mix_rms_db": round(float(mix_rms_db), 1),
@@ -1731,6 +1745,28 @@ def _vocal_periodicity_blocks(y, sr, block_sec=16.0):
     return out
 
 
+def _to_44100(x, src_sr):
+    """把分轨数组统一到 44100，形状不变。
+
+    demucs 输出的是**源文件原生采样率**的数组（内部先重采样到 44100 推理，
+    再把结果重采样回原生 sr 返回）。下游一律按 44100 换算时间，
+    所以进入分析前必须统一，否则 48k 源整体偏 8.8%、96k 源偏 117.7%。
+    """
+    if not src_sr or int(src_sr) == 44100:
+        return x
+    a = np.asarray(x, dtype=np.float32)
+    if a.ndim == 2 and a.shape[0] <= a.shape[1]:
+        # (channels, samples)：沿最后一维重采样
+        return librosa.resample(a, orig_sr=src_sr, target_sr=44100,
+                                res_type="soxr_hq", axis=-1)
+    if a.ndim == 2:
+        # (samples, channels)：转置后重采样，再转回
+        return librosa.resample(a.T, orig_sr=src_sr, target_sr=44100,
+                                res_type="soxr_hq", axis=-1).T
+    return librosa.resample(a, orig_sr=src_sr, target_sr=44100,
+                            res_type="soxr_hq")
+
+
 def _instrumental_ranges(mono, sr, block_sec=4.0, min_sec=8.0, delta_db=35.0,
                          merge_gap=4.0):
     """切出「人声轨几乎没能量」的区间 —— 段落角色的证据,不是段落名。
@@ -1854,10 +1890,16 @@ def analyze_lyrics(path, *, model="base", cache_dir=None):
         "audio")
     _st = os.stat(path)
     _key = _hl.sha1(
-        f"{os.path.abspath(path)}|{_st.st_size}|{int(_st.st_mtime)}|htdemucs".encode()
+        f"{os.path.abspath(path)}|{_st.st_size}|{int(_st.st_mtime)}|htdemucs|v13-sr44".encode()
     ).hexdigest()[:16]
     _wpath = os.path.join(_cache_audio, f"{_key}_vocals.mp3")
     _wpath_old = os.path.join(_cache_audio, f"{_key}_vocals.flac")
+    try:
+        import soundfile as _sf
+        _src_sr = int(_sf.info(path).samplerate)
+        _src_dur = float(_sf.info(path).duration)
+    except Exception:
+        _src_sr, _src_dur = 44100, None
     arr = None
     for _wp in (_wpath, _wpath_old):
         if not os.path.exists(_wp):
@@ -1866,6 +1908,12 @@ def analyze_lyrics(path, *, model="base", cache_dir=None):
             import soundfile as _sf
             arr, _sr = _sf.read(_wp, dtype="float32")
             arr = arr.T if arr.ndim == 2 else arr
+            # 旧缓存可能把「原生采样率的样本」标成 44100 写进来：
+            # 只校验文件头不够，还要用时长对一遍源文件。
+            if _sr != 44100:
+                raise ValueError(f"缓存采样率 {_sr} 不是 44100")
+            if _src_dur and abs(len(arr) / _sr - _src_dur) > min(2.0, max(0.3, _src_dur * 0.02)):
+                raise ValueError("缓存时长与源文件不符（可能是旧版错标缓存）")
             print("[听写] 命中人声缓存,跳过分离", file=sys.stderr)
             break
         except Exception:
@@ -1878,6 +1926,9 @@ def analyze_lyrics(path, *, model="base", cache_dir=None):
         except Exception as e:  # noqa: BLE001
             return {"available": False, "reason": f"人声分离失败: {e}"}
         arr = np.asarray(res.get("vocals"), dtype=np.float32)
+        # 先统一到 44100 再缓存：缓存里必须是真正的 44100 数组，
+        # 不能只把文件头写成 44100（sf.write 不会重采样）。
+        arr = _to_44100(arr, _src_sr)
         try:
             import soundfile as _sf
             os.makedirs(_cache_audio, exist_ok=True)
@@ -2486,7 +2537,7 @@ def _track_relations(block_db, activity_blocks=None, min_delta=3.0, max_sync=2):
         return []
     picks = []
     for n in names:
-        vals = [(b.get("start_sec"), b.get("db")) for b in block_db[n]
+        vals = [(b.get("start_sec"), b.get("end_sec"), b.get("db")) for b in block_db[n]
                 if b.get("start_sec") is not None and b.get("db") is not None]
         if len(vals) < 3:
             continue
@@ -2495,10 +2546,12 @@ def _track_relations(block_db, activity_blocks=None, min_delta=3.0, max_sync=2):
         if len(vals) > 6:
             vals = vals[:-2]
         _cand = []
-        for i, ((t0, v0), (t1, v1)) in enumerate(zip(vals, vals[1:])):
+        for i, ((s0, _e0, v0), (s1, e1, v1)) in enumerate(zip(vals, vals[1:])):
             d = v1 - v0
             if abs(d) >= min_delta:
-                _cand.append((t0, t1, d, v0, v1, i))
+                # 区间 = [变化前那一块的开始, 变化后那一块的结束]。
+                # 修：以前用 s1（后一块的开始）当结束，所有区间少标一个块长。
+                _cand.append((s0, e1 if e1 is not None else s1, d, v0, v1, i))
         if not _cand:
             continue
         # 每轨最多 3 升 + 3 降（进候选池）。只取最大那一条时，同一轨里后来的事件会被挤掉：
