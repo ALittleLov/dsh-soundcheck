@@ -2,6 +2,23 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.9.10] - 
+
+### 修复
+
+- **本地分轨模型探测漏了 HF 缓存的 `snapshots/` 层级**。代码只找
+  `模型目录/htdemucs_fp16weights.onnx`，但安装器下载后实际落在
+  `models/stems/models--StemSplitio--htdemucs-onnx/snapshots/<hash>/` 下，
+  于是永远判定「没有本地模型」，每次都去连 HuggingFace。
+  网络抖动时会直接抛 `Server disconnected` 导致分轨失败（经验遇到一次）。
+  现在扁平路径找不到时会再往 `snapshots/` 里找一层，命中就用本地文件，不再联网。
+  三处探测（分轨分析、听写人声分离、预览转写）都已补上。
+
+### 说明
+
+- 只影响「本地已有模型但每次仍要联网」这一种情况；联网正常时行为和之前一致。
+- 未引入新依赖。
+
 ## [0.9.9] - 
 
 ### 修复

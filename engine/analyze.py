@@ -1406,6 +1406,14 @@ def analyze_stems(path, mix_rms_db, *, model="htdemucs", cache_dir=None, want_pi
         "htdemucs_6s_fp16weights.onnx" if model == "htdemucs_6s"
         else "htdemucs_fp16weights.onnx",
     )
+    if not os.path.exists(_local):
+        # HF 缓存把权重放在 snapshots/<hash>/ 下，扁平路径找不到时再往里找一层。
+        
+        import glob as _glob
+        _hits = _glob.glob(os.path.join(model_dir, "**", os.path.basename(_local)),
+                           recursive=True)
+        if _hits:
+            _local = _hits[0]
     if os.path.exists(_local):
         try:
             from demucs_onnx import inference as _inf
@@ -1867,6 +1875,12 @@ def analyze_lyrics(path, *, model="base", cache_dir=None):
         os.path.join(_data, "models", "stems") if _data
         else os.path.join(_script_dir, "models", "stems"))
     local_stem = os.path.join(model_dir, "htdemucs_fp16weights.onnx")
+    if not os.path.exists(local_stem):
+        import glob as _glob
+        _hits = _glob.glob(os.path.join(model_dir, "**", "htdemucs_fp16weights.onnx"),
+                           recursive=True)
+        if _hits:
+            local_stem = _hits[0]
     if os.path.exists(local_stem):
         try:
             from demucs_onnx import inference as _inf
@@ -2110,6 +2124,12 @@ def quick_transcribe(y, sr, model="tiny", max_lines=4):
             os.path.join(_data, "models", "stems") if _data
             else os.path.join(_script_dir, "models", "stems"))
         _local = os.path.join(model_dir, "htdemucs_fp16weights.onnx")
+        if not os.path.exists(_local):
+            import glob as _glob
+            _hits = _glob.glob(os.path.join(model_dir, "**", "htdemucs_fp16weights.onnx"),
+                               recursive=True)
+            if _hits:
+                _local = _hits[0]
         if os.path.exists(_local):
             from demucs_onnx import inference as _inf
             _inf.download_single_model = lambda *a, **k: _local
