@@ -14,6 +14,7 @@ window.__ModuleLoader__.load({
       engine: '引擎',
       runtime: '运行环境',
       python: 'Python',
+      envDir: '环境目录',
       temp: '临时目录',
       deps: '功能组件',
       models: '模型',
@@ -54,6 +55,7 @@ window.__ModuleLoader__.load({
       engine: 'Engine',
       runtime: 'Runtime',
       python: 'Python',
+      envDir: 'venv dir',
       temp: 'Temp dir',
       deps: 'Features',
       models: 'Models',
@@ -229,6 +231,7 @@ window.__ModuleLoader__.load({
           h('div', { style: C.cardTitle }, t('runtime')),
           h(Row, { name: t('engine'), value: d.engine ? d.root : t('missing'), ok: d.engine }),
           h(Row, { name: t('python'), value: d.python || t('missing'), ok: !!d.python }),
+          h(Row, { name: t('envDir'), value: d.venvDir || t('missing'), ok: d.engine }),
           h(Row, { name: t('temp'), value: d.temp ? t('writable') : t('notWritable'), ok: d.temp }),
           h(Row, { name: t('dataRoot'), value: d.dataRoot })),
 

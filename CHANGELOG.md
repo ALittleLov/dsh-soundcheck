@@ -2,6 +2,29 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.9.11] - 
+
+### 修复
+
+- **插件更新后 Python 环境跟着被删**（issue #3）。venv 原来建在插件目录的
+  `engine/venv`，而插件更新是整目录替换，更新一次就得重装 570 MB。现在 venv 落在用户
+  数据目录（`~/.dsh-soundcheck-data/venv`）；已经装在旧位置的，`/audio-install` 第一次
+  运行会搬过去（同盘改名、跨盘复制，junction 也照搬）。`/audio-status`、`/audio-doctor`
+  和设置面板都会显示环境位置。
+- **重装时选中 Anaconda 的 Python，`import onnxruntime` 以 0xC0000005 崩溃**（issue #3）。
+  provision 不再用「PATH 里第一个 3.10+」，而是列出所有候选（DSH 自带的最前、Anaconda
+  最后），逐个建 venv、装依赖、冒烟 `import onnxruntime`；崩了就删掉换下一个，全崩会
+  列出试过谁、失败原因。已装但坏掉的环境（`pyvenv.cfg` 指向 conda / onnxruntime 起不来）
+  会被改名成 `venv.broken-<时间戳>` 保留，再用别的解释器重建，不静默覆盖。
+- **模型下载一次网络失败就整步失败**（issue #3）。yamnet / musicnn / beat-this / 分轨
+  模型的下载都走带重试的抓取：网络错误重试 2 次（1s、2s 退避），单次 10 分钟超时；
+  4xx 不重试、直接换下一个镜像。
+
+### 说明
+
+- 引擎目录（`engine/analyze.py` + 模型）仍在插件里，只有 venv 挪到了数据目录。
+- 未引入新依赖；首次在稳定位置建环境仍需联网下载依赖。
+
 ## [0.9.10] - 
 
 ### 修复
