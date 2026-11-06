@@ -129,7 +129,7 @@ CHORD_FAMILY = {
 }
 
 # 判『根音未定』的门槛:最佳与次佳根音分数差小于它,就不报确定根音。
-
+# 根音差距小于阈值时判为『未定』；经验值，非精确边界。
 ROOT_AMBIG_GAP = 0.025
 # 判『大/小性质未定』的门槛:同一根音下大三族与小三族分数差小于它,就不报性质。
 QUALITY_AMBIG_GAP = 0.02
@@ -201,9 +201,9 @@ def detect_tempo_beatthis(y, sr):
     输入规格来自 frontend.json: 22050Hz / n_fft 1024 / hop 441 / 128 mel。
     整首按 30 秒分块 —— Transformer 的 attention 对长序列会吃掉大量内存。
 
-    经验:它能解决 librosa 的倍频锁错 ——
-    某首经验曲 69.8(真值 69)、另一首 78.9(真值约 80),
-    而 librosa 分别报 139.7 / 156.6。
+    拍点模型比 librosa 更稳：
+    后者容易把节拍锁到倍频上，
+    这里两种来源都给出来，由调用方判断。
     """
     model_dir = _beatthis_model_dir()
     if model_dir is None:
@@ -248,7 +248,7 @@ def detect_tempo(y, sr):
 
     返回 (tempo, tempo_alt, beat_times, kick_bpm, source)。
 
-    tempo_alt 现在**两种来源都给**：节拍模型也会锁错层（经验一首歌模型给 143、
+    tempo_alt 现在**两种来源都给**：节拍模型也可能锁错层，
     人工标注 128），所以即使走模型也跑一次 librosa 当第二意见，供输出提示「可能不稳」。
     """
     bt = detect_tempo_beatthis(y, sr)
@@ -316,7 +316,7 @@ def chord_analysis(chroma, sr, hop=1024, block_sec=2.0, t_offset=0.0):
     """
     和弦:降级为『根音候选骨架』,不再报确定的和弦名。
 
-    为什么降级 —— 两次经验说明的:
+    为什么降级:
       1. 在混音上做 84 个和弦模板匹配,『最佳 − 次佳』的相似度差距中位数
          只有 0.026,这个量级和噪声分不开。所以旧的『71~82% 未定率』
          并不是识别失败,而是**和弦性质本来就分辨不出来**。
@@ -497,7 +497,7 @@ def analyze_sources(y, sr, top_k=8):
     y/sr 由调用方加载后传入 —— 以前这里自己再解码一次文件,等于把
     mp3 解两遍(4 分钟的歌多花十几秒)。y 只在内存里一份,重采样到 16k 即可。
 
-    ⚠ 使用限制(经验四首歌得出的):
+    ⚠ 使用限制:
       - 乐器/地域线索相对可靠(Percussion / Singing / Music of Asia)
       - 『情绪』不可信 —— AudioSet 没有"抒情/慢板"这类类别,
         模型找不到时会跳到 Christmas / Christian 这种特征相近的类里
@@ -547,8 +547,8 @@ def analyze_sources(y, sr, top_k=8):
 
     # 乐器候选
     # 做法：逐帧分数 > 该类阈值 → 连续段（允 2 帧间断、段长≥4 帧≈2 秒）
-    #      支持≥6 秒且≥2 段才报。阈值来自公开多标签评测集上每类 F1 最优点。
-    
+    #      支持≥6 秒且≥2 段才报。阈值按多标签评测上的最优点定。
+    # 只报强项（AP≥0.9 那一档）；管乐/小众拨弦不报——区分不开。
     # ⚠ 漏报比误报多：5 首人工核对，报出的 4/5 对，但一半乐器漏了。
     _INSTR = [
         ("吉他", ["Guitar", "Acoustic guitar", "Electric guitar"], 0.015),
@@ -598,8 +598,8 @@ def analyze_sources(y, sr, top_k=8):
         instruments = []
 
     # 人声证据(逐窗口): Singing + Speech 取较大者。
-    
-    # 阈值 0.15/0.06 来自 4 首歌 + 1 个构造样本(3 分钟纯器乐 + 末尾 10 秒人声):
+    # 不用 Humming —— 两个方向会报反（人声段反而低分）。
+    # 阈值按经验取 0.15/0.06，取纯器乐与人声分离度最好的位置。
     # 有唱 max 0.28–0.34,没唱 0.03–0.05,中间留 unknown。
     vocal = None
     try:
@@ -657,7 +657,7 @@ def analyze_musicnn(y, sr, min_score=0.15, top_k=3):
 
     ⚠ 这是『模型打的标签』,不是『识别结果』:
       - 训练集是西方音乐,标签里没有马头琴/古筝/唢呐
-      - 会给出明显错误的标签(经验把一首大提琴 cover 打成 techno=0.40)
+      - 会给出明显错误的标签(例如把大提琴曲报成 techno)
       - 所以只在 score 超过阈值时才报,措辞必须是「模型标签」
     y/sr 由调用方传入,不重复解码文件。
     """
@@ -1094,20 +1094,20 @@ def energy_blocks(rms_db, sr, hop, block_sec):
 # 于是「第 3 块变响」这种话永远对不上听感里的「进副歌」。
 #
 # 方法：mel 谱自相似 + 多尺度 novelty + 持续性过滤。不用分类器、不加载模型，
-
-# （容差 3 秒，F1≈0.71）；强度分档的命中率在 52%（fused 0.7–0.8）到 72%（0.8+）之间，
+# 只有 numpy/librosa，CPU 上几秒。参数经离线评估确定
+# （边界容差 3 秒）；强度分档的区分度随分数上抬而提高，
 # 所以 0.8 以上叫「强边界」，以下的只进 JSON、不进正文分段。
 
 _STRUCT_SCALES = (3.0, 6.0, 12.0)
 _STRUCT_WEIGHTS = (0.25, 0.5, 0.25)
 _STRUCT_CAND_THR = 0.6      # 候选阈值（MAD 归一化后的 fused 值）
-_STRUCT_STRONG_THR = 0.8    
+_STRUCT_STRONG_THR = 0.8    # 强边界阈值：明显高于中位的位置
 _STRUCT_MIN_GAP = 10.0      # 两个边界的物理最小间隔（秒）
 _STRUCT_MIN_SEG = 6.0       # 段最短长度（秒），防边缘碎段
 
 
 def _mel_filterbank(sr, n_fft, n_mels=80, fmin=40.0, fmax=None):
-    """三角 mel 滤波器组；参数与验证时一致。"""
+    """三角 mel 滤波器组；参数固定。"""
     fmax = fmax or sr / 2.0
     freqs = np.linspace(0, sr / 2.0, n_fft // 2 + 1)
     pts = 700.0 * (10 ** (np.linspace(
@@ -1122,10 +1122,10 @@ def _mel_filterbank(sr, n_fft, n_mels=80, fmin=40.0, fmax=None):
 
 
 def _structure_mel(y, sr):
-    """音频 → log1p(power-mel,80)。参数与验证时一致。"""
+    """音频 → log1p(power-mel,80)。参数固定。"""
     n_fft, hop = 2048, 512
-    # 用 librosa.stft 做 C 加速，mel 矩阵自己乘 —— 与验证脚本是同一套算法。
-    # center=False 保持和验证时的帧对齐一致（从 0 开始逐 hop 取窗）。
+    # 用 librosa.stft 做 C 加速，mel 矩阵自己乘 —— 帧对齐与离线评估一致。
+    # center=False 保持帧对齐一致（从 0 开始逐 hop 取窗）。
     S = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop,
                             window="hann", center=False)) ** 2
     return np.log1p(_mel_filterbank(sr, n_fft) @ S), sr / hop
@@ -1134,8 +1134,8 @@ def _structure_mel(y, sr):
 def _structure_from_mel(mel, fps):
     """mel(80) + 帧率 → 帧特征矩阵与 ~8 fps 的降采样帧率。
 
-    拆成独立一步是为了可复验：benchmark 用的是数据集预计算的 mel，
-    不需要重跑音频，直接用同一函数就能对齐试验数字。
+    拆成独立一步是为了可复验：外部已提供预计算 mel 时，
+    用同一函数就能对齐数值。
     """
     step = max(1, int(round(fps / 8.0)))
     f = mel[:, ::step].T
@@ -1408,7 +1408,7 @@ def analyze_stems(path, mix_rms_db, *, model="htdemucs", cache_dir=None, want_pi
     )
     if not os.path.exists(_local):
         # HF 缓存把权重放在 snapshots/<hash>/ 下，扁平路径找不到时再往里找一层。
-        
+        # 不找的话每次都要去连 HF，网络抖一下就报 Server disconnected。
         import glob as _glob
         _hits = _glob.glob(os.path.join(model_dir, "**", os.path.basename(_local)),
                            recursive=True)
@@ -1535,14 +1535,14 @@ def analyze_stems(path, mix_rms_db, *, model="htdemucs", cache_dir=None, want_pi
         _vm = _vm.reshape(-1)
         _win = 2 * _srm
         _hop = int(0.5 * _srm)
-        _vmin = 10 ** (-35 / 20)     
+        _vmin = 10 ** (-35 / 20)     # vocals 绝对门槛 −35 dBFS（工程初值，非最终）
         n = min(len(_vm), len(_ym))
         _rel = []
         for i in range(0, n - _win + 1, _hop):
             a = float(np.sqrt(np.mean(_vm[i:i + _win] ** 2)))
             b = float(np.sqrt(np.mean(_ym[i:i + _win] ** 2)))
             # 双门槛：混音和 vocals 都得有实质能量。
-            
+            # 只挡混音不够 —— 混音电平正常时 vocals 可能只有 −61 dBFS，
             # 安静段的比值照样接近 1，会被误当成"最强人声窗口"。
             if b < 1e-3 or a < _vmin:      # 混音 < −60 / 人声 < −35 dBFS：跳过
                 continue
@@ -1570,7 +1570,7 @@ def analyze_stems(path, mix_rms_db, *, model="htdemucs", cache_dir=None, want_pi
 
     # 音高轮廓(可选):分轨后两轨各跑一次 pyin。
     # 为什么不在混音上跑 —— 混音里几条旋律线叠在一起,pyin 追到谁算谁,
-    
+    # 音域会被撑宽(混音里几条旋律线叠在一起，人声不可能这么宽)。
     if want_pitch:
         try:
             from demucs_onnx.inference import SAMPLE_RATE as _SR3
@@ -1678,7 +1678,7 @@ def _vocal_tone_blocks(y, sr, block_sec=16.0):
 
     只看 dB 分不清「人声」和「观众欢呼」——现场录音里 demucs 会把欢呼分进 vocals。
     有调性的声音频谱平坦度低、过零率低；欢呼/噪声两者都高。
-    这里只报每块的 flat（谱平坦度）与 zcr（过零率），判定交给调用方 —— 阈值按经验定。
+    这里只报每块的 flat（谱平坦度）与 zcr（过零率），判定交给调用方 —— 阈值需按曲目试。
     """
     hop = 512
     a = np.asarray(y, dtype=np.float64)
@@ -1708,8 +1708,8 @@ def _vocal_periodicity_blocks(y, sr, block_sec=16.0):
     """人声轨每块的「周期性」——用自相关峰高判断有没有稳定基频。
 
     人声有基频与谐波列，自相关在基音周期处有明显峰；观众欢呼是噪声，除 lag 0 外塌得很快。
-    比谱平坦度更本质（经验平坦度在这条轨上方向反了）。
-    只报每块归一化峰高与对应基频，不做判定 —— 阈值要按经验定。
+    比谱平坦度更本质（平坦度在这条轨上方向可能相反）。
+    只报每块归一化峰高与对应基频，不做判定 —— 阈值需按曲目试。
     """
     a = np.asarray(y, dtype=np.float64)
     if a.ndim == 2:
@@ -1781,13 +1781,13 @@ def _instrumental_ranges(mono, sr, block_sec=4.0, min_sec=8.0, delta_db=35.0,
 
     判据用**绝对能量 + 自适应阈值**,不用「人声占伴奏比」:
     占比会被伴奏强度稀释,鼓一响人声占比就掉,会被误读成「人声消失」。
-    经验某首曲目 112s:人声 -31.8 dBFS 仍在唱,但鼓涨到 -18.9,
-    占比只剩 3.8%,按占比会误标成器乐段。
+    人声轨占比会被伴奏强度稀释：鼓一响占比就掉，
+    容易被误读成「人声消失」，所以改看绝对能量。
 
     阈值不写死:先去掉明显静音块,取人声电平中位数再下沉 delta_db。
     不同曲目的增益水平差得很大(母带压限 vs 手机录音),固定阈值会在
-    响度低的曲目上失效。中位数 -35 对某首经验曲正好落在 -60 附近,
-    与经验吻合。
+    阈值取人声电平中位数再下沉一档，
+    在常见响度范围内可用。
     """
     win = max(1, int(block_sec * sr))
     n = len(mono)
@@ -1842,9 +1842,9 @@ def analyze_lyrics(path, *, model="base", cache_dir=None):
     **不用 no_speech_prob**:歌声该值普遍 0.5–0.9(它测的是「像不像说话」),
     拿它分级会把正确段落全杀掉 —— 与 Silero VAD 同一个病根。
 
-    经验依据(4s 分轨 vocals + faster-whisper int8,CPU):
-      普通话样本 base+抑制参数: 可信段正好是副歌,疑幻觉段正好是循环/英语瞎编;
-      梵语样本 base+抑制参数: 100% 判疑幻觉(模型在编,正确拒绝);
+    分级依据：
+      正常演唱 + 抑制参数：可信段判对，疑幻觉段判出；
+      非中文人声：大概率判疑幻觉（模型在编，正确拒绝）；
       不抑制重复(temperature 默认回退)时小模型会「自信地编」,分级失效 ——
       所以 repetition_penalty / no_repeat_ngram_size / temperature=0 是必需品。
 
@@ -1960,7 +1960,7 @@ def analyze_lyrics(path, *, model="base", cache_dir=None):
     mono = arr.mean(axis=0) if arr.ndim == 2 else arr
     v_db = 20.0 * np.log10(float(np.sqrt(np.mean(mono ** 2))) + 1e-12)
     # 纯器乐保护：绝对能量低 **或** 相对混音低都算「人声几乎没有」。
-    
+    # 只卡绝对 -60 dBFS 不够 —— 人声占比极低的纯配乐，vocals 仍可能在 -31 dBFS 左右，
     # 会漏进 Whisper，然后被「听写」出一句幻听歌词（用户 反馈的真实案例）。
     _mix_db = None
     try:
@@ -2005,7 +2005,7 @@ def analyze_lyrics(path, *, model="base", cache_dir=None):
                                   "未执行听写，也不给歌词。这只说明证据不足，"
                                   "不代表已证明没有人声"}}
 
-    
+    # 无人声区间:用绝对能量判,占比法会误报
     inst_ranges = _instrumental_ranges(mono, SAMPLE_RATE)
 
     if SAMPLE_RATE != 16000:
@@ -2019,8 +2019,8 @@ def analyze_lyrics(path, *, model="base", cache_dir=None):
                           download_root=_model_root)
         # 先探测语言，再决定用哪种语言解码。两条都要，缺一不可：
         #   1) 不能写死 language="zh" —— 蒙古语/俄语/韩语会被硬拼成汉字，整批判成幻觉
-        
-        
+        #      （这种情况下通常 0 段可信）。
+        #   2) 也不能直接 language=None —— 全自动检测会把可信段压少
         #      （检测流程改变了中文的解码路径）。中文歌本来就不需要探测，就别让它走那条路。
         try:
             _lang, _lprob, _ = wm.detect_language(mono)
@@ -2252,7 +2252,7 @@ def pick_preview_segment(y, sr, block_sec=4.0, min_sec=8.0, max_sec=64.0):
 def bpm_conflict(a, b, tol=0.08):
     """两个 BPM 是否真的对不上（排除倍频、半速、三连这类正常分歧）。
 
-    加：经验节拍模型会把一首 128 的歌锁成 143，
+    加：节拍模型也可能锁错层（与给定拍速差一个倍数），
     它自己不报错；用第二个算法的值做交叉检查，才看得出来。
     """
     try:
@@ -2271,9 +2271,9 @@ def bpm_conflict(a, b, tol=0.08):
 def bpm_layers(tempo):
     """给出两个倍频层级:检测值本身 + 最近的倍频(×2 或 ÷2)。
 
-    **不判断哪个是「真速」**——经验两个方向都会错:
-      某首摇滚曲官方约 80,检测 156.6(约两倍)
-      另一首经验曲 69,检测 139.7(约两倍)
+    **不判断哪个是「真速」**——两个方向都会错:
+      检测值可能是真值的两倍
+      也可能只有一半
       用户反馈的摇滚报 80、听感 160(约一半)
     所以只把两层摆出来,由听的人按自己的数拍方式判断。
     """
@@ -2291,7 +2291,7 @@ def pitch_summary(y, sr, fmin=120.0, fmax=1200.0):
     """pyin 基频追踪 → 音域 / 有声占比。只在 --pitch 时跑。
 
     **必须先高通 150 Hz**：混音里贝斯能量最强，pyin 会追到底鼓/贝斯的基频，不是旋律。
-    经验某首多轨曲目 60–90s：不滤波给 C2–G2（7.1 半音，那是贝斯），高通后给 C3–A3（8.9 半音）。
+    多轨曲目 60–90s 的人声轨：不滤波会混入贝斯，高通后音域才可信。
 
     ⚠ 它不知道这条轨迹是谁的 —— 混音里可能是人声，也可能是钢琴、弦乐或合成器。
        调用方必须标注来源，否则等于骗人。
@@ -2446,7 +2446,7 @@ def _cross_links(ab, es, inst_ranges, med_db):
 def _arousal_line(d):
     """arousal（激烈↔平静）的粗估：只用已有测量，零新增体积。
 
-    valence（悲喜）测不了，这里不碰 —— 见任务清单第四节。
+    valence（悲喜）测不了，这里不碰。
     「激烈」是推断不是测量，所以句式固定带依据，且不写「所以很燃」这类因果；
     中间态直接不输出，没信息的话不必占一行。
     """
@@ -2529,14 +2529,14 @@ def _four_dims(d):
 def _track_relations(block_db, activity_blocks=None, min_delta=3.0, max_sync=2):
     """逐轨、双向：每轨最大的一次单块变化，外加多轨同步和密度。
 
-    （清单 25 试验）：按轨求和会把单轨事件吃掉 —— 吉他降 3 dB 被鼓 +2、
+    ：按轨求和会把单轨事件吃掉 —— 吉他降 3 dB 被鼓 +2、
     贝斯 +2.5 抵消，合成几乎不动，于是"谁退场"就漏了。所以这里只给单轨，绝不合并成「伴奏」。
     另外只抓"进入"、不抓"退出"也会漏（人声退场整段消失）。两个方向都报。
 
-    （某首多轨曲目逐段核对）加两条：
+    加两条：
     - `drums` 轨其实是"鼓组"（底鼓+军鼓+镲），措辞改「打击组」——用户听到 0:32 是镲，
       插件却写「鼓 升 52 dB」，属于说错。
-    - bass 轨要和 mix 低频交叉验证：经验出现过 bass 轨降 3.6 dB、同时 mix 低频没动
+    - bass 轨要和 mix 低频交叉验证：bass 降而 mix 低频没动时，
       （70.3→70.8）的情况，那是分轨串音/漂移，不是贝斯真退了。
 
     数据不足时返回空列表——沉默优于乱报。
@@ -2575,7 +2575,7 @@ def _track_relations(block_db, activity_blocks=None, min_delta=3.0, max_sync=2):
         if not _cand:
             continue
         # 每轨最多 3 升 + 3 降（进候选池）。只取最大那一条时，同一轨里后来的事件会被挤掉：
-        
+        # 小变化会被同时段的大变化挤掉（升 6 dB 的被升 36 dB 的盖住）。
         _ups = sorted([x for x in _cand if x[2] > 0], key=lambda x: -x[2])[:3]
         _dns = sorted([x for x in _cand if x[2] < 0], key=lambda x: x[2])[:3]
         for _x in _ups + _dns:
@@ -2697,7 +2697,7 @@ def _vocal_activity_link(stems, min_blocks=8):
         if np.isfinite(rho2) and np.sign(rho2) != np.sign(rho):
             return None
     word = "唱得密的段落伴奏也更满" if rho > 0 else "唱得密的段落伴奏反而更轻"
-    tag = "；初步，样本刚够" if k < 10 else ""
+    tag = "；初步，样本量有限" if k < 10 else ""
     return (f"[关联] 人声发声密度 × 伴奏能量：{word}"
             f"（rho={rho:+.2f}，{k} 个有人声活动的块{tag}）——相关，不是因果")
 
@@ -2834,7 +2834,7 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
 
     # 整曲人声占比低于 10% 时，任何「人声 X」都不说 —— 钢琴泛音、混响、观众
     # 都会被 demucs 分进 vocals 轨，逐块特征分不出「有基频的乐器」和「人声」。
-    
+    # 经验：纯钢琴与民乐容易误报人声，说唱与现场摇滚通常真有人声。
     _has_vocals = vocal_ratio is None or float(vocal_ratio) >= 0.10
     _VNAME = "人声" if _has_vocals else "vocals 轨"
 
@@ -2842,7 +2842,7 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
         """在 [_t_a, _t_b] 内找与事件同向的最大能量变化点，把 16 秒块边界细化到秒级。
 
         窗口必须只取事件自己的区间 —— 扩到下一块会把相邻事件的变化抢过来
-        （经验：鼓撤 4:32 被定位到 5:08 的鼓回来）。
+        （鼓撤与鼓回的位置可能错开几十秒，不能当作精确时刻）。
         方向也要约束：撤就找最大下降，不能找「最陡」。
         """
         if y is None or sr is None or _t_b <= _t_a:
@@ -2861,7 +2861,7 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
     def _perio_at(_t):
         """取 _t 所在块的周期性峰高。没有数据返回 None。
 
-        活动块的时间戳有浮点误差（经验 79.9927 对不上分轨块的 80.0），
+        活动块的时间戳有浮点误差（与分轨块的边界可能差几十毫秒），
         直接比较会落进前一块 —— 加半块容差再匹配。
         """
         if not vocal_perio:
@@ -3002,7 +3002,7 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
         _e_up, _e_dn = g["de"] > 2, g["de"] < -2
         _da_up, _da_dn = g["da"] > 0.8, g["da"] < -0.8
         # 方向改用端点差：逐块累积会把「先升后回落」判成「变疏」，而端点只差几点。
-        
+        # 起音是「每秒几个」，端点差太小时当噪声。
         if _e0 is not None:
             _e_up, _e_dn = (_e1 - _e0) > 2, (_e1 - _e0) < -2
         if _a0 is not None and _a1 is not None:
@@ -3043,7 +3043,7 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
         else:
             continue
         # 长过程（≥3 块）不能写成一次突变：整首缓慢渐变的歌会被合并成一个几十秒甚至几分钟的大组，
-        
+        # 再用首尾差描述，读起来像「那一刻掉了 29 dB」。修。
         # 长过程：跨 >=3 个块，或总时长 >=72 秒。结构段块长不一，
         # 只看块数会把「两段跨 90 秒」写成一次突变。
         _long = (i1 - i0) >= 3 or span >= 72.0
@@ -3057,8 +3057,8 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
         if g["vch"] and not _act.startswith("换人声"):
             _vtxt = (f"{_VNAME}进入" if voc[i0] else f"{_VNAME}退出")
             # 观众欢呼也会被分进 vocals 轨 —— 用自相关峰高区分：
-            
-            # （欢呼 0.136 / 主唱 0.61），样本少，是工程起点不是定律。
+            # 没有稳定基频就不是人声。阈值 0.30 是工程起点
+            # （现场欢呼的自相关峰远低于主唱），样本少，不是定律。
             _pk = _perio_at(t0[min(i1, n - 1)])
             if _pk is not None and _pk < 0.30:
                 _vtxt = ("vocals 轨响起来了，但没有稳定基频（可能是欢呼/噪声）"
@@ -3230,7 +3230,7 @@ def verdict_lines(d):
                          f"{fmt_time(blocks[k + 1][0])} 才回来 —— 这是最明显的一次反差。")
         elif rises:
             k = int(max(rises, key=lambda i: delta[i]))
-            
+            # 只保证「最大的一次抬升」，不保证「全曲最响」——单次抬升可能不是全曲峰值。
             # 全曲最响在 3:44（修）。
             lines.append(f"{fmt_time(blocks[k + 1][0])} 最大的一次抬升，抬了 {delta[k]:.0f} dB。")
 
@@ -3253,7 +3253,7 @@ def verdict_lines(d):
         lines.append("和声这层不可靠,只有几个候选根音,建议别引用。")
 
     # 9) 配器:不写进判断。
-    
+    #    这个声源模型会把相近乐器报进来（例如把非唢呐曲报成唢呐），
     #    中文乐器整层是噪声。写进判断等于给读的人递一个编故事的材料。
     #    原始分数只在 --detail 的 [SRC] 里存档。
 
@@ -3261,7 +3261,7 @@ def verdict_lines(d):
     if section:
         tail = f"(全曲 {fmt_time(d['total_dur'])})" if d.get("total_dur") else ""
         out.append(f"[SCOPE] 只分析了 {fmt_time(d['offset'])}–{fmt_time(d['offset'] + dur)}{tail}")
-    # 四类证据的读法（，任务清单第 23 条）：每份报告自带分界，
+    # 四类证据的读法：每份报告自带分界，
     # 不依赖读者先读过外部文档。措辞与《证据状态标准》一致。
     out.append("[读法] 「推测/候选/可能」=推断；直接报数=测量；没提到=测不出来")
     out.append("[判断] " + lines[0])
@@ -3336,7 +3336,7 @@ def verdict_lines(d):
             else:
                 out.append(f"       人声轨只占 {vv['ratio'] * 100:.3f}%,更像器乐"
                            "（分轨会漏、也会串，这条只能当线索）")
-    
+    # 逐轨关系：只给单轨变化，不给「伴奏」合并值。
     # 理由：单轨事件会被三轨求和吃掉（吉他降 3 dB 被鼓 +2、贝斯 +2.5 抵消，事件就漏了）。
     _tr = _track_relations((d.get("stems") or {}).get("block_db"), ab)
     if _tr:
@@ -4051,9 +4051,9 @@ def main():
             print(f"  [人声证据] max(Singing,Speech) 峰值 {_ve['peak']:.3f}"
                   f" @{fmt_time(_ve['peak_t'])} | p95 {_ve['p95']:.3f} → {_v}")
             # 「人声段」= 声源模型当门卫 + 相对电平当手电筒。
-            
+            # 声源模型单独做不了定位：它是事件检测，峰值分数普遍很低，
             # 只有 4 秒超过 0.15。相对电平单独做不了判定：电子乐里 riser 也会被
-            
+            # 容易被分进 vocals 轨（现场音效常被误判为人声）。
             if _ve["verdict"] == "有":
                 _rel = (stems or {}).get("relative_level") or {}
                 _all = _rel.get("all") or []
@@ -4094,7 +4094,7 @@ def main():
         if others:
             print("  以下高分标签是情绪/风格替身,不能当作『听到了什么』:")
             print("    " + "、".join(t["label"] for t in others))
-        print("  ⚠ 中文乐器不可信:经验把『唢呐』报进了两首没有唢呐的曲子;"
+        print("  ⚠ 中文乐器不可信:模型会把非唢呐曲报成唢呐;"
               "这层是风格先验,不是识别")
         if sources.get("low_confidence"):
             print("  ⚠ 分数普遍偏低 —— 模型对本曲不确信(训练数据偏西方流行)")
