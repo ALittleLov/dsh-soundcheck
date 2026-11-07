@@ -3261,8 +3261,7 @@ def verdict_lines(d):
     if section:
         tail = f"(全曲 {fmt_time(d['total_dur'])})" if d.get("total_dur") else ""
         out.append(f"[SCOPE] 只分析了 {fmt_time(d['offset'])}–{fmt_time(d['offset'] + dur)}{tail}")
-    # 四类证据的读法：每份报告自带分界，
-    # 不依赖读者先读过外部文档。措辞与《证据状态标准》一致。
+    # 证据状态说明：每份报告直接区分测量、推断与未覆盖的内容。
     out.append("[读法] 「推测/候选/可能」=推断；直接报数=测量；没提到=测不出来")
     out.append("[判断] " + lines[0])
     out.extend("       " + ln for ln in lines[1:])
