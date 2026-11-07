@@ -1087,7 +1087,7 @@ def energy_blocks(rms_db, sr, hop, block_sec):
     return out
 
 
-# ── 结构切段──
+# ── 结构切段 ──
 #
 # 为什么不再用固定 16 秒块：固定块的边界是「文件的时间刻度」，不是「音乐的位置」。
 # 段落长度从 8 秒到 2 分钟不等，16 秒块会把一个段落切进两块，也会让两段共享一块；
@@ -1378,7 +1378,7 @@ def analyze_stems(path, mix_rms_db, *, model="htdemucs", cache_dir=None, want_pi
     root = cache_dir or os.environ.get("DSH_AUDIO_CACHE_DIR") or _cache_default
     st = os.stat(path)
     # 版本号进 key：改过分析逻辑就递增，旧缓存自然失效。
-    # 教训 ：把字段名从 longest_run 改成 longest_sec 后，缓存没版本号，
+    # 教训：把字段名从 longest_run 改成 longest_sec 后，缓存没版本号，
     # 旧 json 里读不到新字段，于是全曲显示「最长连续 0.00 秒」——误以为是算法坏了，
     # 查到最后是缓存。凡是往缓存里加/改字段，都要动这个数字。
     # v9：加了 vocal_activity（B3 的 X），旧缓存里没这个字段。
@@ -1961,7 +1961,7 @@ def analyze_lyrics(path, *, model="base", cache_dir=None):
     v_db = 20.0 * np.log10(float(np.sqrt(np.mean(mono ** 2))) + 1e-12)
     # 纯器乐保护：绝对能量低 **或** 相对混音低都算「人声几乎没有」。
     # 只卡绝对 -60 dBFS 不够 —— 人声占比极低的纯配乐，vocals 仍可能在 -31 dBFS 左右，
-    # 会漏进 Whisper，然后被「听写」出一句幻听歌词（用户 反馈的真实案例）。
+    # 会漏进 Whisper，然后被「听写」出一句幻听歌词（用户反馈的真实案例）。
     _mix_db = None
     try:
         import soundfile as _sf2
@@ -2252,7 +2252,7 @@ def pick_preview_segment(y, sr, block_sec=4.0, min_sec=8.0, max_sec=64.0):
 def bpm_conflict(a, b, tol=0.08):
     """两个 BPM 是否真的对不上（排除倍频、半速、三连这类正常分歧）。
 
-    加：节拍模型也可能锁错层（与给定拍速差一个倍数），
+    补充：节拍模型也可能锁错层（与给定拍速差一个倍数），
     它自己不报错；用第二个算法的值做交叉检查，才看得出来。
     """
     try:
