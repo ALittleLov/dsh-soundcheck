@@ -123,7 +123,7 @@ window.__ModuleLoader__.load({
       const [checkedAt, setCheckedAt] = useState('')
       const [elapsed, setElapsed] = useState(0)
       const [checking, setChecking] = useState(false)
-      const [protectedMsg, setProtectedMsg] = useState(false)
+      const [protectedMsg, setProtectedMsg] = useState(() => { try { return localStorage.getItem('dsc_protected') === '1' } catch { return false } })
       const userClosedLog = useRef(false)
 
       const load = useCallback(() => {
@@ -293,7 +293,7 @@ window.__ModuleLoader__.load({
           h('span', { style: { ...C.dot, background: shown.tone.color } }),
           h('span', {
             style: overall === 'ready' && !protectedMsg ? { ...C.heroTitle, cursor: 'pointer' } : C.heroTitle,
-            onClick: overall === 'ready' && !protectedMsg ? () => setProtectedMsg(true) : undefined,
+            onClick: overall === 'ready' && !protectedMsg ? () => { setProtectedMsg(true); try { localStorage.setItem('dsc_protected', '1') } catch { /* ignore */ } } : undefined,
           }, overall === 'ready' && protectedMsg ? '您已处于大肥鱼强大的保护之中 (｡•̀ᴗ-)✧' : shown.title),
           (busy === 'engine' || busy === 'stems' || busy === 'stems6s' || busy === 'asr' || activeRun)
             ? h('div', { style: {
