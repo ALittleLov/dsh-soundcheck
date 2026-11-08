@@ -122,6 +122,7 @@ window.__ModuleLoader__.load({
       const [copied, setCopied] = useState(false)
       const [checkedAt, setCheckedAt] = useState('')
       const [elapsed, setElapsed] = useState(0)
+      const [checking, setChecking] = useState(false)
       const userClosedLog = useRef(false)
 
       const load = useCallback(() => {
@@ -130,7 +131,8 @@ window.__ModuleLoader__.load({
           .then((j) => {
             setState({ status: 'ok', data: j.data })
             setCheckedAt(new Date().toLocaleTimeString())
-            const active = j.data && j.data.activeJob
+            const saved = (() => { try { return localStorage.getItem('dsc_active_job') } catch { return null } })()
+            const active = (j.data && j.data.activeJob) || (saved ? { id: saved, status: 'running' } : null)
             if (active && active.status === 'running') {
               setBusy('engine')
               poll(active.id)
@@ -155,10 +157,11 @@ window.__ModuleLoader__.load({
             .then((j) => {
               if (!j.ok) {
                 clearInterval(timer); setBusy(''); setOutErr(String(j.error || 'job 丢失')); setOpenLog(true); userClosedLog.current = false
+                try { localStorage.removeItem('dsc_active_job') } catch { /* ignore */ }
                 return
               }
               if (j.job.status !== 'running') {
-                clearInterval(timer); setBusy('')
+                clearInterval(timer); setBusy(''); setChecking(false); try { localStorage.removeItem('dsc_active_job') } catch { /* ignore */ }
                 const failed = j.job.status === 'error'
                 if (failed) { setOutErr(j.job.text || '执行失败'); if (!userClosedLog.current) setOpenLog(true) }
                 else { setOutErr(''); setOut(j.job.text || '') }
@@ -169,12 +172,24 @@ window.__ModuleLoader__.load({
         }, 1200)
       }, [load])
 
+      const checkUpdate = useCallback(() => {
+        setChecking(true); setOut(''); setOutErr('')
+        fetch('/dsh-soundcheck/api/action?kind=check-update', { method: 'POST' })
+          .then((r) => r.json())
+          .then((j) => {
+            if (!j.ok) { setChecking(false); setOutErr(String(j.error || '失败')); setOpenLog(true); return }
+            poll(j.job)
+          })
+          .catch((e) => { setChecking(false); setOutErr(String((e && e.message) || e)); setOpenLog(true) })
+      }, [poll])
+
       const act = useCallback((kind) => {
         setBusy(kind); setOut(''); setOutErr(''); userClosedLog.current = false
         fetch('/dsh-soundcheck/api/action?kind=' + encodeURIComponent(kind), { method: 'POST' })
           .then((r) => r.json())
           .then((j) => {
             if (!j.ok) { setBusy(''); setOutErr(String(j.error || '失败')); setOpenLog(true); return }
+            try { localStorage.setItem('dsc_active_job', j.job) } catch { /* ignore */ }
             poll(j.job)
           })
           .catch((e) => { setBusy(''); setOutErr(String((e && e.message) || e)); setOpenLog(true) })
@@ -247,7 +262,7 @@ window.__ModuleLoader__.load({
           h('div', { style: C.heroTop },
           h('span', { style: { ...C.dot, background: shown.tone.color } }),
           h('span', { style: C.heroTitle }, shown.title),
-          busy
+          (busy === 'engine' || busy === 'stems' || busy === 'stems6s' || busy === 'asr')
             ? h('div', { style: {
                 position: 'relative', overflow: 'hidden', width: '120px', height: '32px', padding: '0 8px', boxSizing: 'border-box',
                 fontSize: '12px', fontWeight: 600, lineHeight: '20px', borderRadius: '8px',
@@ -357,7 +372,7 @@ window.__ModuleLoader__.load({
           h('span', null, d.version ? t('checkedAt') + ' ' + (checkedAt || '—') : ''),
           h('span', { style: C.btnRow },
             h('button', { style: C.btn, disabled: !!busy, onClick: () => act('doctor') }, busy === 'doctor' ? t('running') : t('btnDoctor')),
-            h('button', { style: C.btn, disabled: !!busy, onClick: () => act('check-update') }, '检查更新'),
+            h('button', { style: C.btn, disabled: !!busy || checking, onClick: checkUpdate }, checking ? '检查中…' : '检查更新'),
             h('button', { style: C.btn, disabled: !!busy, onClick: load }, t('refresh')))))
     }
 
