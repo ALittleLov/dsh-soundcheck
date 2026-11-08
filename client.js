@@ -72,7 +72,7 @@ window.__ModuleLoader__.load({
       btn: { padding: '6px 12px', fontSize: '12px', lineHeight: '20px', borderRadius: '8px', cursor: 'pointer', textAlign: 'center',
         border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.3))',
         background: 'transparent', color: 'var(--dsw-alias-label-primary, #eee)' },
-      primary: { padding: '6px 12px', fontSize: '12px', fontWeight: 600, lineHeight: '20px', borderRadius: '8px', cursor: 'pointer', textAlign: 'center',
+      primary: { width: '120px', height: '32px', padding: '0 8px', boxSizing: 'border-box', fontSize: '12px', fontWeight: 600, lineHeight: '20px', borderRadius: '8px', cursor: 'pointer', textAlign: 'center', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap',
         border: '1px solid transparent', background: 'var(--dsw-alias-button-primary-fill, #4a7)',
         color: 'var(--dsw-alias-label-primary-foreground, #fff)' },
       details: { marginTop: '4px' },
@@ -198,8 +198,8 @@ window.__ModuleLoader__.load({
       const deps = d.deps || {}
       const models = d.models || []
       const modelOk = (n) => { const m = models.find((x) => x.name === n); return !!(m && m.ok) }
-      const coreDepsOk = CORE_DEPS.every((m) => !!deps[m])
-      const coreModelsOk = REQUIRED_MODELS.every(modelOk)
+      const coreDepsOk = d.groups && d.groups.deps ? d.groups.deps.every((x) => x.ok) : CORE_DEPS.every((m) => !!deps[m])
+      const coreModelsOk = d.groups && d.groups.models ? d.groups.models.every((x) => x.ok) : REQUIRED_MODELS.every(modelOk)
       const versionOk = d.versionMatch !== false && d.engineVersion === d.expectedVersion
       const optionalStems = !!(d.components && d.components.stems)
       const optionalAsr = !!(d.components && d.components.asr)
@@ -221,7 +221,7 @@ window.__ModuleLoader__.load({
       const doMain = () => act(overall === 'ready' ? 'doctor' : 'engine')
 
       const depsCount = CORE_DEPS.filter((m) => !!deps[m]).length
-      const modelsCount = REQUIRED_MODELS.filter(modelOk).length
+      const modelsCount = d.groups && d.groups.models ? d.groups.models.filter((x) => x.ok).length : REQUIRED_MODELS.filter(modelOk).length
       const failing = !!outErr
       const missingDeps = CORE_DEPS.filter((m) => !deps[m])
       const missingModels = REQUIRED_MODELS.filter((n) => !modelOk(n))
@@ -249,8 +249,8 @@ window.__ModuleLoader__.load({
           h('span', { style: C.heroTitle }, shown.title),
           busy
             ? h('div', { style: {
-                position: 'relative', overflow: 'hidden',
-                padding: '6px 12px', fontSize: '12px', fontWeight: 600, lineHeight: '20px', borderRadius: '8px',
+                position: 'relative', overflow: 'hidden', width: '120px', height: '32px', padding: '0 8px', boxSizing: 'border-box',
+                fontSize: '12px', fontWeight: 600, lineHeight: '20px', borderRadius: '8px',
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                 background: 'var(--dsw-alias-button-primary-fill, #4a7)',
                 color: 'var(--dsw-alias-label-primary-foreground, #fff)',
@@ -357,6 +357,7 @@ window.__ModuleLoader__.load({
           h('span', null, d.version ? t('checkedAt') + ' ' + (checkedAt || '—') : ''),
           h('span', { style: C.btnRow },
             h('button', { style: C.btn, disabled: !!busy, onClick: () => act('doctor') }, busy === 'doctor' ? t('running') : t('btnDoctor')),
+            h('button', { style: C.btn, disabled: !!busy, onClick: () => act('check-update') }, '检查更新'),
             h('button', { style: C.btn, disabled: !!busy, onClick: load }, t('refresh')))))
     }
 
