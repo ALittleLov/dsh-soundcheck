@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
-**Local music analysis for DSH.** dsh-soundcheck connects DSH Agents to the independent [Music Evidence Engine](https://github.com/ALittleLov/music-evidence-engine-public), providing inspectable audio measurements and time-localized evidence instead of unsupported guesses.
+**Local music analysis for DSH.** dsh-soundcheck connects DSH Agents to the independent [Music Evidence Engine](https://github.com/ALittleLov/music-evidence-engine), providing inspectable audio measurements and time-localized evidence instead of unsupported guesses.
 
 - **Local and CPU-based:** no dedicated GPU required. Audio is analyzed on your machine, not uploaded. Initial setup downloads dependencies and model files.
 - **Evidence:** tempo, key candidates, loudness, energy, spectral bands, acoustic structure changes, timeline events, and vocal/instrument candidates; text and JSON outputs.
@@ -26,6 +26,6 @@ In DSH, open **Settings → Audio Analysis** and follow the Engine installation 
 
 ## Project and license
 
-[Music Evidence Engine](https://github.com/ALittleLov/music-evidence-engine-public) · [Latest Soundcheck release](https://github.com/ALittleLov/dsh-soundcheck/releases/latest)
+[Music Evidence Engine](https://github.com/ALittleLov/music-evidence-engine) · [Latest Soundcheck release](https://github.com/ALittleLov/dsh-soundcheck/releases/latest)
 
 Primarily validated on Windows. MIT licensed; third-party dependencies and model weights retain their respective licenses.
