@@ -306,11 +306,11 @@ window.__ModuleLoader__.load({
                   backgroundSize: '48px 100%', animation: 'dsc-move 1s linear infinite',
                 } }),
                 h('span', { style: { position: 'relative' } }, '安装中 · ' + elapsedShown + 's'))
-            : h('button', {
+            : (overall !== 'ready' ? h('button', {
                 style: shown.primary ? C.primary : C.btn,
                 disabled: !!busy,
                 onClick: doMain,
-              }, shown.btn)),
+              }, shown.btn) : null)),
           h('div', { style: C.hint }, shown.hint),
         (overall === 'ready' && d.engineVersion && d.latestVersion && d.engineVersion !== d.latestVersion)
           ? h('div', { style: { ...C.hint, ...C.muted } }, `本机 Engine ${d.engineVersion}，发布版 ${d.latestVersion}（比发布版新，不影响使用）`)
