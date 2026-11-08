@@ -123,6 +123,7 @@ window.__ModuleLoader__.load({
       const [checkedAt, setCheckedAt] = useState('')
       const [elapsed, setElapsed] = useState(0)
       const [checking, setChecking] = useState(false)
+      const [protectedMsg, setProtectedMsg] = useState(false)
       const userClosedLog = useRef(false)
 
       const load = useCallback(() => {
@@ -290,7 +291,10 @@ window.__ModuleLoader__.load({
         h('div', { style: C.hero },
           h('div', { style: C.heroTop },
           h('span', { style: { ...C.dot, background: shown.tone.color } }),
-          h('span', { style: C.heroTitle }, shown.title),
+          h('span', {
+            style: overall === 'ready' ? { ...C.heroTitle, cursor: 'pointer' } : C.heroTitle,
+            onClick: overall === 'ready' ? () => setProtectedMsg((v) => !v) : undefined,
+          }, overall === 'ready' && protectedMsg ? '您已处于大肥鱼强大的保护之中' : shown.title),
           (busy === 'engine' || busy === 'stems' || busy === 'stems6s' || busy === 'asr' || activeRun)
             ? h('div', { style: {
                 position: 'relative', overflow: 'hidden', width: '120px', height: '32px', padding: '0 8px', boxSizing: 'border-box',
