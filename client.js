@@ -253,6 +253,14 @@ window.__ModuleLoader__.load({
         : d.engineState === 'broken' ? 'repair'
           : d.engineState === 'update_available' ? 'update'
             : (!engineOk ? 'repair' : 'ready')
+      // 引擎一旦离开“就绪”（坏了/修复中），彩蛋作废；修好后应显示正常就绪。
+      useEffect(() => {
+        if (overall !== 'ready' && protectedMsg) {
+          setProtectedMsg(false)
+          try { localStorage.removeItem('dsc_protected') } catch { /* ignore */ }
+        }
+      }, [overall, protectedMsg])
+
       const meta = {
         notInstalled: { tone: C.bad, title: t('statusNotInstalled'), hint: t('hintNotInstalled'), btn: t('btnInstall'), primary: true },
         repair: { tone: C.warn, title: t('statusRepair'), hint: t('hintRepair'), btn: t('btnRepair'), primary: true },
