@@ -1,165 +1,162 @@
-/* dsh-soundcheck 设置页面板：状态总览 + 安装/自检按钮。 */
+/* dsh-soundcheck 设置面板：状态控制台。 */
 window.__ModuleLoader__.load({
   id: 'dsh-soundcheck',
   factory: (require) => {
     const React = require('react')
-    const { useState, useEffect, useCallback } = React
+    const { useState, useEffect, useCallback, useRef } = React
     const h = React.createElement
     const NS = 'dsh-soundcheck'
 
     const zh = {
-      nav: '音频分析',
-      title: 'dsh-soundcheck',
-      subtitle: '本地音频分析引擎的状态与安装',
-      engine: '引擎',
-      runtime: '运行环境',
-      python: 'Python',
-      envDir: '环境目录',
-      temp: '临时目录',
-      deps: '功能组件',
-      models: '模型',
-      components: '可选功能',
-      dataRoot: '数据目录',
-      install: '安装 / 修复引擎',
-      installOne: '安装',
-      stems: '安装分轨',
-      asr: '安装听写',
-      doctor: '自检',
-      running: '正在执行…',
-      done: '完成',
-      failed: '失败',
-      retry: '刷新',
-      missing: '缺失',
-      ok: '已安装',
-      bad: '异常',
-      partial: '部分安装',
-      notInstalled: '未安装',
-      writable: '可写',
-      notWritable: '不可写',
-      optionalTag: '可选',
-      loading: '加载中…',
-      loadFailed: '状态读取失败',
-      gCore: '基础分析',
-      gCoreDesc: '解码音频、算节拍/调性/能量',
-      gStems: '分轨',
-      gStemsDesc: '把人声、鼓、贝斯、其他分开',
-      gAsr: '歌词听写',
-      gAsrDesc: '人声转文字',
-      gStemComp: '分轨（人声 / 鼓 / 贝斯 / 其他）',
-      gAsrComp: '歌词听写（人声转文字）',
+      nav: '音频分析', title: 'dsh-soundcheck', subtitle: '本地音频分析引擎',
+      core: '核心分析', diag: '诊断与日志', optional: '按需功能',
+      statusNotInstalled: '引擎尚未安装', statusRepair: '引擎需要修复',
+      statusPartial: '部分分析能力可用', statusReady: '核心分析已就绪',
+      hintNotInstalled: '首次安装会准备 Python 环境、核心依赖与必需模型。',
+      hintRepair: '检测到核心组件缺失或版本不一致，修复后恢复正常。',
+      hintPartial: '核心分析部分受损，补齐缺失组件后恢复。',
+      hintReady: '核心依赖与必需模型齐全，可以直接分析音频。',
+      btnInstall: '安装引擎', btnRepair: '修复引擎', btnFill: '补齐缺失组件',
+      btnDoctor: '运行自检', running: '正在执行…', refresh: '刷新', refreshDone: '刷新',
+      env: '运行环境', deps: '核心依赖', models: '必需模型', dirs: '本地目录',
+      detail: '查看组件与目录详情', optionalSummary: '分轨 · 歌词听写',
+      stems: '音轨分离', asr: '歌词听写', installOne: '安装', repairOne: '修复',
+      installed: '已安装', missing: '缺失', partial: '部分', notInstalled: '未安装',
+      copy: '复制日志', copied: '已复制', logTitle: '任务日志', errorSummary: '执行失败',
+      loading: '加载中…', loadFailed: '状态读取失败', retry: '重试',
+      venv: 'venv', data: '数据目录', temp: '临时目录', writable: '可写', notWritable: '不可写',
+      checkedAt: '检查于',
     }
     const en = {
-      nav: 'Audio',
-      title: 'dsh-soundcheck',
-      subtitle: 'Local audio engine status',
-      engine: 'Engine',
-      runtime: 'Runtime',
-      python: 'Python',
-      envDir: 'venv dir',
-      temp: 'Temp dir',
-      deps: 'Features',
-      models: 'Models',
-      components: 'Optional features',
-      dataRoot: 'Data dir',
-      install: 'Install / repair engine',
-      installOne: 'Install',
-      stems: 'Install stems',
-      asr: 'Install ASR',
-      doctor: 'Check-up',
-      running: 'Running…',
-      done: 'Done',
-      failed: 'Failed',
-      retry: 'Refresh',
-      missing: 'missing',
-      ok: 'installed',
-      bad: 'error',
-      partial: 'partial',
-      notInstalled: 'not installed',
-      writable: 'writable',
-      notWritable: 'not writable',
-      optionalTag: 'optional',
-      loading: 'Loading…',
-      loadFailed: 'Failed to load status',
-      gCore: 'Core analysis',
-      gCoreDesc: 'decode, tempo/key/energy',
-      gStems: 'Stem separation',
-      gStemsDesc: 'vocals, drums, bass, other',
-      gAsr: 'Lyrics transcription',
-      gAsrDesc: 'vocals to text',
-      gStemComp: 'Stems (vocals / drums / bass / other)',
-      gAsrComp: 'Lyrics (vocals to text)',
+      nav: 'Audio', title: 'dsh-soundcheck', subtitle: 'Local audio engine',
+      core: 'Core analysis', diag: 'Diagnostics', optional: 'Optional features',
+      statusNotInstalled: 'Engine not installed', statusRepair: 'Engine needs repair',
+      statusPartial: 'Partially available', statusReady: 'Core analysis ready',
+      hintNotInstalled: 'First install prepares Python, core deps and required models.',
+      hintRepair: 'Core components missing or version mismatch.',
+      hintPartial: 'Part of core analysis is unavailable.',
+      hintReady: 'Core deps and required models are ready.',
+      btnInstall: 'Install engine', btnRepair: 'Repair engine', btnFill: 'Fill missing parts',
+      btnDoctor: 'Run check-up', running: 'Running…', refresh: 'Refresh', refreshDone: 'Refresh',
+      env: 'Runtime', deps: 'Core deps', models: 'Required models', dirs: 'Local dirs',
+      detail: 'Show components and paths', optionalSummary: 'Stems · Lyrics',
+      stems: 'Stem separation', asr: 'Lyrics transcription', installOne: 'Install', repairOne: 'Repair',
+      installed: 'installed', missing: 'missing', partial: 'partial', notInstalled: 'not installed',
+      copy: 'Copy log', copied: 'Copied', logTitle: 'Task log', errorSummary: 'Failed',
+      loading: 'Loading…', loadFailed: 'Failed to load status', retry: 'Retry',
+      venv: 'venv', data: 'Data dir', temp: 'Temp dir', writable: 'writable', notWritable: 'not writable',
+      checkedAt: 'checked at',
     }
     let t = (k) => k
 
     const C = {
-      wrap: { padding: '4px 0', display: 'flex', flexDirection: 'column', gap: '12px' },
-      head: { display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' },
+      wrap: { padding: '4px 0', display: 'flex', flexDirection: 'column', gap: '22px', fontSize: '13px' },
+      head: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '10px' },
       title: { fontSize: '15px', fontWeight: 600, color: 'var(--dsw-alias-label-primary, #eee)' },
-      sub: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, #999)' },
-      card: {
-        border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))',
-        borderRadius: '10px',
-        background: 'var(--dsw-alias-bg-layer-1, rgba(128,128,128,.06))',
-        padding: '10px 12px',
-      },
-      cardTitle: { fontSize: '12px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary, #aaa)', marginBottom: '6px' },
-      row: { display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '3px 0', fontSize: '13px' },
-      name: { color: 'var(--dsw-alias-label-secondary, #999)' },
-      val: { color: 'var(--dsw-alias-label-primary, #ddd)', fontFamily: 'ui-monospace, monospace', fontSize: '12px' },
+      sub: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, #888)' },
+      hero: { border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))', borderRadius: '12px', padding: '18px', display: 'flex', flexDirection: 'column', gap: '10px' },
+      heroTop: { display: 'flex', alignItems: 'center', gap: '10px' },
+      dot: { width: '8px', height: '8px', borderRadius: '50%', flex: 'none' },
+      heroTitle: { fontSize: '21px', fontWeight: 600, color: 'var(--dsw-alias-label-primary, #eee)', flex: '1 1 auto' },
+      hint: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, #888)', lineHeight: '1.6' },
+      section: { display: 'flex', flexDirection: 'column' },
+      sectionTitle: { fontSize: '13px', fontWeight: 600, color: 'var(--dsw-alias-label-secondary, #aaa)', marginBottom: '2px' },
+      row: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', padding: '10px 0', borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.18))' },
+      name: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #999)' },
+      val: { fontSize: '12px', fontFamily: 'ui-monospace, monospace', color: 'var(--dsw-alias-label-primary, #ddd)', textAlign: 'right', overflowWrap: 'anywhere' },
       ok: { color: 'var(--dsw-alias-state-success-primary, #3a3)' },
       bad: { color: 'var(--dsw-alias-state-error-primary, #d55)' },
       warn: { color: 'var(--dsw-alias-state-warn-primary, #d90)' },
-      hint: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, #888)' },
-      btnRow: { display: 'flex', gap: '8px', flexWrap: 'wrap' },
-      btn: {
-        padding: '6px 12px', fontSize: '12px', borderRadius: '8px', cursor: 'pointer',
+      muted: { color: 'var(--dsw-alias-label-tertiary, #888)' },
+      btnRow: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' },
+      btn: { padding: '5px 12px', fontSize: '12px', borderRadius: '8px', cursor: 'pointer',
         border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.3))',
-        background: 'var(--dsw-alias-bg-layer-2, rgba(128,128,128,.1))',
-        color: 'var(--dsw-alias-label-primary, #eee)',
-      },
-      primary: {
-        padding: '6px 12px', fontSize: '12px', borderRadius: '8px', cursor: 'pointer',
-        border: '1px solid transparent',
-        background: 'var(--dsw-alias-button-primary-fill, #4a7)',
-        color: 'var(--dsw-alias-label-primary-foreground, #fff)',
-      },
-      out: {
-        marginTop: '8px', padding: '8px 10px', borderRadius: '8px', fontSize: '12px',
-        fontFamily: 'ui-monospace, monospace', whiteSpace: 'pre-wrap', maxHeight: '240px', overflow: 'auto',
-        background: 'var(--dsw-alias-markdown-code-block, rgba(0,0,0,.25))',
-        color: 'var(--dsw-alias-label-primary, #ddd)',
-      },
+        background: 'transparent', color: 'var(--dsw-alias-label-primary, #eee)' },
+      primary: { padding: '6px 12px', fontSize: '12px', fontWeight: 600, borderRadius: '8px', cursor: 'pointer',
+        border: '1px solid transparent', background: 'var(--dsw-alias-button-primary-fill, #4a7)',
+        color: 'var(--dsw-alias-label-primary-foreground, #fff)' },
+      details: { marginTop: '4px' },
+      summary: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #999)', cursor: 'pointer', padding: '8px 0' },
+      log: { margin: '6px 0 0', padding: '10px 12px', borderRadius: '8px', fontSize: '11px', lineHeight: '1.55',
+        fontFamily: 'ui-monospace, monospace', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '240px', overflow: 'auto',
+        background: 'var(--dsw-alias-markdown-code-block, rgba(0,0,0,.25))', color: 'var(--dsw-alias-label-primary, #ddd)' },
+      detailBox: { display: 'flex', flexDirection: 'column', gap: '4px' },
+      detailLine: { display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '12px' },
+      detailName: { fontFamily: 'ui-monospace, monospace', color: 'var(--dsw-alias-label-secondary, #999)' },
+      detailVal: { color: 'var(--dsw-alias-label-primary, #ddd)', textAlign: 'right' },
+      errBox: { padding: '10px 12px', borderRadius: '8px', fontSize: '12px',
+        border: '1px solid var(--dsw-alias-state-error-primary, #d55)', color: 'var(--dsw-alias-state-error-primary, #d55)', overflowWrap: 'anywhere' },
+      tool: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, #888)' },
     }
+
+    const REQUIRED_MODELS = ['yamnet.onnx', 'yamnet_class_map.csv', 'beat_this', 'frontend.json']
+    const CORE_DEPS = ['librosa', 'onnxruntime', 'soundfile', 'soxr']
 
     function Row({ name, value, ok }) {
       return h('div', { style: C.row },
         h('span', { style: C.name }, name),
-        h('span', { style: ok === true ? { ...C.val, ...C.ok } : ok === false ? { ...C.val, ...C.bad } : C.val }, value))
+        h('span', { style: { ...C.val, ...(ok === true ? C.ok : ok === false ? C.bad : {}) } }, value))
+    }
+
+    function Item({ title, desc, tone, onClick, open, children, action }) {
+      return h('div', null,
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 0' },
+          onClick },
+          h('div', { style: { flex: '1 1 auto', minWidth: 0 } },
+            h('div', { style: { fontSize: '13px', fontWeight: 500, color: 'var(--dsw-alias-label-primary, #eee)' } }, title),
+            desc ? h('div', { style: { fontSize: '12px', color: tone || 'var(--dsw-alias-label-tertiary, #888)', marginTop: '2px', overflowWrap: 'anywhere' } }, desc) : null),
+          onClick ? h('span', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, #888)', flex: 'none' } }, open ? '收起' : '查看') : null,
+          action || null),
+        open && children
+          ? h('div', { style: { padding: '0 0 12px 0', display: 'flex', flexDirection: 'column', gap: '6px' } }, children)
+          : null)
     }
 
     function Panel() {
       const [state, setState] = useState({ status: 'loading' })
       const [busy, setBusy] = useState('')
       const [out, setOut] = useState('')
-      const [open, setOpen] = useState({})
+      const [outErr, setOutErr] = useState('')
+      const [openLog, setOpenLog] = useState(false)
+      const [openKey, setOpenKey] = useState('')
+      const [copied, setCopied] = useState(false)
+      const [checkedAt, setCheckedAt] = useState('')
+      const [elapsed, setElapsed] = useState(0)
+      const userClosedLog = useRef(false)
 
       const load = useCallback(() => {
         fetch('/dsh-soundcheck/api/overview', { headers: { accept: 'application/json' }, cache: 'no-store' })
           .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json() })
-          .then((j) => setState({ status: 'ok', data: j.data }))
+          .then((j) => {
+            setState({ status: 'ok', data: j.data })
+            setCheckedAt(new Date().toLocaleTimeString())
+          })
           .catch((e) => setState({ status: 'error', error: String((e && e.message) || e) }))
       }, [])
 
       useEffect(() => { load() }, [load])
+
+      useEffect(() => {
+        if (!busy) return
+        setElapsed(0)
+        const timer = setInterval(() => setElapsed((v) => v + 1), 1000)
+        return () => clearInterval(timer)
+      }, [busy])
 
       const poll = useCallback((id) => {
         const timer = setInterval(() => {
           fetch('/dsh-soundcheck/api/job?id=' + encodeURIComponent(id), { cache: 'no-store' })
             .then((r) => r.json())
             .then((j) => {
-              if (!j.ok) { clearInterval(timer); setBusy(''); setOut(String(j.error || 'job 丢失')); return }
+              if (!j.ok) {
+                clearInterval(timer); setBusy(''); setOutErr(String(j.error || 'job 丢失')); setOpenLog(true); userClosedLog.current = false
+                return
+              }
               if (j.job.status !== 'running') {
-                clearInterval(timer); setBusy(''); setOut(j.job.text || '')
+                clearInterval(timer); setBusy('')
+                const failed = j.job.status === 'error'
+                if (failed) { setOutErr(j.job.text || '执行失败'); if (!userClosedLog.current) setOpenLog(true) }
+                else { setOutErr(''); setOut(j.job.text || '') }
                 load()
               }
             })
@@ -168,105 +165,194 @@ window.__ModuleLoader__.load({
       }, [load])
 
       const act = useCallback((kind) => {
-        setBusy(kind); setOut('')
+        setBusy(kind); setOut(''); setOutErr(''); userClosedLog.current = false
         fetch('/dsh-soundcheck/api/action?kind=' + encodeURIComponent(kind), { method: 'POST' })
           .then((r) => r.json())
           .then((j) => {
-            if (!j.ok) { setBusy(''); setOut(String(j.error || '失败')); return }
+            if (!j.ok) { setBusy(''); setOutErr(String(j.error || '失败')); setOpenLog(true); return }
             poll(j.job)
           })
-          .catch((e) => { setBusy(''); setOut(String((e && e.message) || e)) })
+          .catch((e) => { setBusy(''); setOutErr(String((e && e.message) || e)); setOpenLog(true) })
       }, [poll])
 
-      if (state.status === 'loading') return h('div', { style: C.wrap }, h('div', { style: C.sub }, t('loading')))
+      const copyLog = useCallback(() => {
+        const text = [outErr, out].filter(Boolean).join('\n')
+        try {
+          navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
+        } catch { /* 剪贴板不可用时忽略 */ }
+      }, [out, outErr])
+
+      if (state.status === 'loading') return h('div', { style: C.wrap }, h('div', { style: C.hint }, t('loading')))
       if (state.status === 'error') {
         return h('div', { style: C.wrap },
-          h('div', { style: C.bad }, t('loadFailed') + '：' + state.error),
+          h('div', { style: C.errBox }, t('loadFailed') + '：' + state.error),
           h('div', { style: C.btnRow }, h('button', { style: C.btn, onClick: load }, t('retry'))))
       }
 
       const d = state.data
       const deps = d.deps || {}
-      const groups = [
-        { key: 'core', title: t('gCore'), desc: t('gCoreDesc'), modules: ['librosa', 'onnxruntime', 'soundfile'] },
-        { key: 'stems', title: t('gStems'), desc: t('gStemsDesc'), optional: true, modules: ['demucs_onnx', 'soxr'] },
-        { key: 'asr', title: t('gAsr'), desc: t('gAsrDesc'), optional: true, modules: ['faster_whisper'] },
-      ]
-      const depGroup = (g) => {
-        const states = g.modules.map((m) => !!deps[m])
-        const all = states.every(Boolean)
-        const none = states.every((s) => !s)
-        const label = all ? t('ok') : none ? t('notInstalled') : t('partial')
-        const tone = all ? C.ok : none ? C.bad : C.warn
-        const expanded = !!open[g.key]
-        return h('div', { key: g.key },
-          h('div', {
-            style: { ...C.row, cursor: 'pointer', alignItems: 'baseline' },
-            onClick: () => setOpen((o) => ({ ...o, [g.key]: !o[g.key] })),
-          },
-            h('span', { style: C.name },
-              (expanded ? '▾ ' : '▸ ') + g.title,
-              g.optional ? h('span', { style: { ...C.hint, marginLeft: '6px' } }, '[' + t('optionalTag') + ']') : null,
-              h('span', { style: { ...C.hint, marginLeft: '8px' } }, g.desc)),
-            h('span', { style: { ...C.val, ...tone } }, label)),
-          expanded
-            ? h('div', { style: { padding: '2px 0 6px 16px' } },
-              g.modules.map((m) => h(Row, {
-                key: m, name: m,
-                value: deps[m] ? t('ok') : t('notInstalled'),
-                ok: !!deps[m],
-              })))
-            : null)
-      }
+      const models = d.models || []
+      const modelOk = (n) => { const m = models.find((x) => x.name === n); return !!(m && m.ok) }
+      const coreDepsOk = CORE_DEPS.every((m) => !!deps[m])
+      const coreModelsOk = REQUIRED_MODELS.every(modelOk)
+      const versionOk = d.versionMatch !== false && d.engineVersion === d.expectedVersion
+      const optionalStems = !!(d.components && d.components.stems)
+      const optionalAsr = !!(d.components && d.components.asr)
+      const componentsOk = !!(d.components && d.components.stems)
+      const engineOk = !!d.engine
 
-      const installed = groups.filter((g) => g.modules.every((m) => !!deps[m]))
-      const missing = groups.filter((g) => !g.modules.every((m) => !!deps[m]))
+      const hasUpdate = !!(d.engineVersion && d.latestVersion && d.engineVersion !== d.latestVersion)
+      const overall = !engineOk ? 'notInstalled'
+        : (!versionOk ? 'repair' : (!coreDepsOk || !coreModelsOk || !componentsOk ? 'partial' : 'ready'))
+      const meta = {
+        notInstalled: { tone: C.bad, title: t('statusNotInstalled'), hint: t('hintNotInstalled'), btn: t('btnInstall'), primary: true },
+        repair: { tone: C.warn, title: t('statusRepair'), hint: t('hintRepair'), btn: t('btnRepair'), primary: true },
+        partial: { tone: C.warn, title: t('statusPartial'), hint: t('hintPartial'), btn: t('btnFill'), primary: true },
+        ready: { tone: C.ok, title: t('statusReady'), hint: t('hintReady'), btn: t('btnDoctor'), primary: false },
+      }[overall]
+      const shown = hasUpdate && overall === 'ready'
+        ? { tone: C.warn, title: '有可用更新', hint: `当前 Engine ${d.engineVersion}，可更新到 ${d.latestVersion}；确认后才会升级。`, btn: '更新 Engine', primary: true }
+        : meta
+      const doMain = () => act(overall === 'ready' ? 'doctor' : 'engine')
+
+      const depsCount = CORE_DEPS.filter((m) => !!deps[m]).length
+      const modelsCount = REQUIRED_MODELS.filter(modelOk).length
+      const failing = !!outErr
+      const missingDeps = CORE_DEPS.filter((m) => !deps[m])
+      const missingModels = REQUIRED_MODELS.filter((n) => !modelOk(n))
+      const clickRow = (key, name, value, ok, body) => h('div', {
+        style: { ...C.row, cursor: 'pointer', flexDirection: 'column', alignItems: 'stretch', gap: '0' },
+        onClick: () => setOpenKey((k) => (k === key ? '' : key)),
+      },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '12px' } },
+          h('span', { style: C.name }, (openKey === key ? '▾ ' : '▸ ') + name),
+          h('span', { style: { ...C.val, ...(ok === true ? C.ok : ok === false ? C.bad : {}) } }, value)),
+        openKey === key
+          ? h('div', { style: { padding: '8px 0 2px 14px' } }, body)
+          : null)
 
       return h('div', { style: C.wrap },
         h('div', { style: C.head },
-          h('div', { style: C.title }, t('title')),
-          h('div', { style: C.sub }, 'v' + d.version + ' · ' + t('subtitle'))),
+          h('div', null,
+            h('div', { style: C.title }, t('title')),
+            h('div', { style: { ...C.sub, marginTop: '2px' } }, t('subtitle'))),
+          h('div', { style: C.sub }, 'v' + d.version)),
 
-        h('div', { style: C.card },
-          h('div', { style: C.cardTitle }, t('runtime')),
-          h(Row, { name: t('engine'), value: d.engine ? d.root : t('missing'), ok: d.engine }),
-          h(Row, { name: t('python'), value: d.python || t('missing'), ok: !!d.python }),
-          h(Row, { name: t('envDir'), value: d.venvDir || t('missing'), ok: d.engine }),
-          h(Row, { name: t('temp'), value: d.temp ? t('writable') : t('notWritable'), ok: d.temp }),
-          h(Row, { name: t('dataRoot'), value: d.dataRoot })),
+        h('div', { style: C.hero },
+          h('div', { style: C.heroTop },
+          h('span', { style: { ...C.dot, background: shown.tone.color } }),
+          h('span', { style: C.heroTitle }, shown.title),
+          busy
+            ? h('div', { style: {
+                position: 'relative', overflow: 'hidden', minWidth: '170px',
+                padding: '7px 16px', fontSize: '12px', fontWeight: 600, borderRadius: '8px',
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                background: 'var(--dsw-alias-button-primary-fill, #4a7)',
+                color: 'var(--dsw-alias-label-primary-foreground, #fff)',
+              } },
+                h('style', null, '@keyframes dsc-move{from{background-position:0 0}to{background-position:48px 0}}'),
+                h('div', { style: {
+                  position: 'absolute', inset: 0,
+                  background: 'repeating-linear-gradient(90deg, rgba(255,255,255,0) 0 18px, rgba(255,255,255,.28) 18px 36px)',
+                  backgroundSize: '48px 100%', animation: 'dsc-move 1s linear infinite',
+                } }),
+                h('span', { style: { position: 'relative' } }, t('running') + ' · ' + elapsed + 's'))
+            : h('button', {
+                style: shown.primary ? C.primary : C.btn,
+                disabled: !!busy,
+                onClick: doMain,
+              }, shown.btn)),
+          h('div', { style: C.hint }, shown.hint),
+          (missingDeps.length || missingModels.length)
+            ? h('div', { style: { ...C.hint, ...C.bad } }, '缺少：' + [...missingDeps, ...missingModels].join('、'))
+            : null),
 
-        h('div', { style: C.card }, h('div', { style: C.cardTitle }, t('deps')), installed.map(depGroup)),
-
-        h('div', { style: C.card },
-          h('div', { style: C.cardTitle }, t('models')),
-          (d.models || []).map((m) => h(Row, {
-            key: m.name, name: m.name,
-            value: m.ok ? t('ok') + ' · ' + m.size_mb + ' MB' : t('notInstalled'),
-            ok: m.ok,
+        h('div', { style: C.section },
+          h('div', { style: C.sectionTitle }, t('core')),
+          h(Item, {
+            title: t('env'),
+            desc: d.python ? 'Python ' + d.python + ' · Engine ' + (d.engineVersion || '?') : t('notInstalled'),
+            onClick: () => setOpenKey((k) => (k === 'env' ? '' : 'env')),
+            open: openKey === 'env',
+          }, h('div', { style: C.detailBox },
+            h(Row, { name: 'venv', value: d.venvDir || '—' }),
+            h(Row, { name: t('data'), value: d.dataRoot || '—' }))),
+          h(Item, {
+            title: t('deps'),
+            desc: coreDepsOk ? CORE_DEPS.length + ' 项检查通过' : depsCount + '/' + CORE_DEPS.length + ' · 缺少 ' + missingDeps.join('、'),
+            tone: coreDepsOk ? null : C.bad.color,
+            onClick: () => setOpenKey((k) => (k === 'deps' ? '' : 'deps')),
+            open: openKey === 'deps',
+          }, h('div', null, CORE_DEPS.map((m) => h('div', { key: m, style: C.detailLine },
+            h('span', { style: C.detailName }, m),
+            h('span', { style: { ...C.detailVal, ...(deps[m] ? {} : C.bad) } }, deps[m] ? t('installed') : t('missing')))))),
+          h(Item, {
+            title: t('models'),
+            desc: coreModelsOk ? REQUIRED_MODELS.length + ' 项齐全' : modelsCount + '/' + REQUIRED_MODELS.length + ' · 缺少 ' + missingModels.join('、'),
+            tone: coreModelsOk ? null : C.bad.color,
+            onClick: () => setOpenKey((k) => (k === 'models' ? '' : 'models')),
+            open: openKey === 'models',
+          }, h('div', null, REQUIRED_MODELS.map((n) => {
+            const m = models.find((x) => x.name === n)
+            return h('div', { key: n, style: C.detailLine },
+              h('span', { style: C.detailName }, n),
+              h('span', { style: { ...C.detailVal, ...(m && m.ok ? {} : C.bad) } }, m && m.ok ? (m.size_mb ? m.size_mb + ' MB' : t('installed')) : t('missing')))
           }))),
+          h(Item, {
+            title: '音轨分离（4 轨）',
+            desc: optionalStems ? '已就绪：人声 / 鼓 / 贝斯 / 其他' : '未安装：人声 / 鼓 / 贝斯 / 其他',
+            tone: optionalStems ? null : C.bad.color,
+          }, null),
+          h(Item, {
+            title: t('dirs'),
+            desc: d.temp ? '检查通过' : '临时目录不可写',
+            tone: d.temp ? null : C.bad.color,
+            onClick: () => setOpenKey((k) => (k === 'dirs' ? '' : 'dirs')),
+            open: openKey === 'dirs',
+          }, h('div', { style: C.detailBox },
+            h(Row, { name: t('venv'), value: d.venvDir || '—' }),
+            h(Row, { name: t('data'), value: d.dataRoot || '—' }),
+            h(Row, { name: t('temp'), value: d.temp ? t('writable') : t('notWritable') }))),
 
-        missing.length
-          ? h('div', { style: C.card },
-            h('div', { style: C.cardTitle }, t('components')),
-            missing.map((g) => h('div', {
-              key: g.key,
-              style: { ...C.row, alignItems: 'baseline' },
-            },
-              h('span', { style: C.name },
-                g.title,
-                h('span', { style: { ...C.hint, marginLeft: '8px' } }, g.desc)),
-              h('button', {
-                style: C.btn, disabled: !!busy,
-                onClick: () => act(g.key),
-              }, busy === g.key ? t('running') : t('installOne')))))
-          : null,
+          h(Item, {
+            title: t('optional'),
+            desc: '音轨分离 · 歌词听写',
+            onClick: () => setOpenKey((k) => (k === 'opt' ? '' : 'opt')),
+            open: openKey === 'opt',
+          }, h('div', null,
+            h(Item, {
+              title: '音轨分离（6 轨）',
+              desc: '在 4 轨基础上再分吉他 / 钢琴',
+              action: h('span', { style: C.btnRow },
+                h('button', { style: C.btn, disabled: !!busy, onClick: (e) => { e.stopPropagation(); act('stems6s') } }, '安装 6 轨')),
+            }),
+            h(Item, {
+              title: t('asr'),
+              desc: '人声转文字',
+              action: h('span', { style: C.btnRow },
+                h('button', { style: C.btn, disabled: !!busy, onClick: (e) => { e.stopPropagation(); act('asr') } }, '安装')),
+            })))),
 
-        h('div', { style: C.btnRow },
-          h('button', { style: C.primary, disabled: !!busy, onClick: () => act('engine') }, busy === 'engine' ? t('running') : t('install')),
-          h('button', { style: C.btn, disabled: !!busy, onClick: () => act('doctor') }, busy === 'doctor' ? t('running') : t('doctor')),
-          h('button', { style: C.btn, disabled: !!busy, onClick: load }, t('retry'))),
+        h('div', { style: C.section },
+          h('div', { style: C.sectionTitle }, t('diag')),
+          failing
+            ? h('div', { style: C.errBox }, outErr.slice(0, 300))
+            : h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, #888)', padding: '6px 0 10px' } }, '最近任务：无异常'),
+          failing || openLog
+            ? (out || outErr
+              ? h('div', null,
+                  h('pre', { style: C.log }, [outErr, out].filter(Boolean).join('\n\n')),
+                  h('div', { style: { marginTop: '6px' } }, h('button', { style: C.btn, onClick: copyLog }, copied ? t('copied') : t('copy'))))
+              : null)
+            : (out || outErr
+              ? h('button', { style: { ...C.btn, marginTop: '6px' }, onClick: () => setOpenLog(true) }, '查看日志')
+              : null)),
 
-        out ? h('div', { style: C.out }, out) : null)
+        h('div', { style: C.tool },
+          h('span', null, d.version ? t('checkedAt') + ' ' + (checkedAt || '—') : ''),
+          h('span', { style: C.btnRow },
+            h('button', { style: C.btn, disabled: !!busy, onClick: () => act('doctor') }, busy === 'doctor' ? t('running') : t('btnDoctor')),
+            h('button', { style: C.btn, disabled: !!busy, onClick: load }, t('refresh')))))
     }
 
     return {

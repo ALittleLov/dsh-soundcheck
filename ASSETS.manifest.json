@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "plugin": "dsh-soundcheck",
+  "version": "1.0.1",
+  "engine_version": "0.1.1",
+  "note": "模型来源以 Engine 的 models.json 为准；本清单仅供审计。权重不随本包分发，除 musicnn 由 Engine 内置。",
+  "assets": [
+    {
+      "name": "yamnet.onnx",
+      "bundled": false,
+      "download_url": "https://huggingface.co/zeropointnine/yamnet-onnx/resolve/main/yamnet.onnx",
+      "mirror_url": "https://hf-mirror.com/zeropointnine/yamnet-onnx/resolve/main/yamnet.onnx",
+      "license": "Apache-2.0",
+      "sha256": "1510041dce24a2e9e84ec546807ac408ae496da6d1ed41bc3ccba649623f8e19",
+      "size": 16093603,
+      "min_size": 16093603,
+      "local_verified": true
+    },
+    {
+      "name": "musicnn.onnx",
+      "bundled": true,
+      "download_url": "https://huggingface.co/oriyonay/musicnn-pytorch",
+      "mirror_url": null,
+      "license": "Apache-2.0 (third-party conversion); upstream MusicNN code ISC",
+      "sha256": "a4d64c1dac195bdb118e789ddd38115c68028d26ad692448f5a8748e39490df6",
+      "size": 3192987,
+      "min_size": 3192987,
+      "local_verified": true
+    },
+    {
+      "name": "yamnet_class_map.csv",
+      "bundled": false,
+      "download_url": "随 YAMNet（Soundcheck Bridge 安装资产）",
+      "mirror_url": null,
+      "license": "Apache-2.0",
+      "sha256": "cdf24d193e196d9e95912a2667051ae203e92a2ba09449218ccb40ef787c6df2",
+      "size": 14096,
+      "min_size": 14096,
+      "local_verified": true
+    },
+    {
+      "name": "beat-this-final0.onnx",
+      "bundled": false,
+      "download_url": "https://huggingface.co/aaatmy/beat-this-onnx/resolve/main/beat-this-final0.onnx",
+      "mirror_url": "https://hf-mirror.com/aaatmy/beat-this-onnx/resolve/main/beat-this-final0.onnx",
+      "license": "MIT",
+      "sha256": "e5e37b7d1802895e42559c5a1ced7619b1601d257a5c8e167c9d45de37c1b078",
+      "size": 82098846,
+      "min_size": 82098846,
+      "local_verified": true
+    },
+    {
+      "name": "frontend.json",
+      "bundled": false,
+      "download_url": "https://huggingface.co/aaatmy/beat-this-onnx/resolve/main/frontend.json",
+      "mirror_url": "https://hf-mirror.com/aaatmy/beat-this-onnx/resolve/main/frontend.json",
+      "license": "MIT",
+      "sha256": "7b2ba71db92b79cb33f45feb21854161de329b86a7e6ea686c3fec51ce85eb9f",
+      "size": 298186,
+      "min_size": 298186,
+      "local_verified": true
+    },
+    {
+      "name": "htdemucs_fp16weights.onnx",
+      "bundled": false,
+      "download_url": "https://huggingface.co/StemSplitio/htdemucs-onnx/resolve/main/htdemucs_fp16weights.onnx",
+      "mirror_url": "https://hf-mirror.com/StemSplitio/htdemucs-onnx/resolve/main/htdemucs_fp16weights.onnx",
+      "license": "MIT",
+      "sha256": "d05c269d0178d2a72ad484b10b11dd370193fc923201c3b27a99f848745db70a",
+      "size": null,
+      "min_size": null,
+      "local_verified": true
+    },
+    {
+      "name": "htdemucs_6s_fp16weights.onnx",
+      "bundled": false,
+      "download_url": "https://huggingface.co/StemSplitio/htdemucs-6s-onnx/resolve/main/htdemucs_6s_fp16weights.onnx",
+      "mirror_url": "https://hf-mirror.com/StemSplitio/htdemucs-6s-onnx/resolve/main/htdemucs_6s_fp16weights.onnx",
+      "license": "MIT",
+      "sha256": "7ce55792e2231c93fbf92de95f5fd5b3a5e6c89f7db690dfd693e8f1dce56869",
+      "size": null,
+      "min_size": null,
+      "local_verified": true
+    }
+  ]
+}
