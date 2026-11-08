@@ -294,7 +294,7 @@ window.__ModuleLoader__.load({
           h('span', {
             style: overall === 'ready' && !protectedMsg ? { ...C.heroTitle, cursor: 'pointer' } : C.heroTitle,
             onClick: overall === 'ready' && !protectedMsg ? () => setProtectedMsg(true) : undefined,
-          }, overall === 'ready' && protectedMsg ? '您已处于大肥鱼强大的保护之中' : shown.title),
+          }, overall === 'ready' && protectedMsg ? '您已处于大肥鱼强大的保护之中 (｡•̀ᴗ-)✧' : shown.title),
           (busy === 'engine' || busy === 'stems' || busy === 'stems6s' || busy === 'asr' || activeRun)
             ? h('div', { style: {
                 position: 'relative', overflow: 'hidden', width: '120px', height: '32px', padding: '0 8px', boxSizing: 'border-box',
