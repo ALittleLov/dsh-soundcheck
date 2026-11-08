@@ -143,6 +143,25 @@ window.__ModuleLoader__.load({
 
       useEffect(() => { load() }, [load])
 
+      // 后端任务是唯一事实来源：挂载即订阅，卸载即取消；不依赖组件本地 busy。
+      const [snap, setSnap] = useState(null)
+      useEffect(() => {
+        let alive = true
+        let timer = null
+        const ctl = new AbortController()
+        const tick = async () => {
+          try {
+            const r = await fetch('/dsh-soundcheck/api/overview', { cache: 'no-store', signal: ctl.signal })
+            if (!r.ok) throw new Error('HTTP ' + r.status)
+            const j = await r.json()
+            if (alive) setSnap(j.data || null)
+          } catch { /* 保留上一次快照 */ }
+          finally { if (alive) timer = setTimeout(tick, 1500) }
+        }
+        tick()
+        return () => { alive = false; if (timer) clearTimeout(timer); ctl.abort() }
+      }, [])
+
       useEffect(() => {
         if (!busy) return
         setElapsed(0)
@@ -222,6 +241,10 @@ window.__ModuleLoader__.load({
       const engineOk = !!d.engine
 
       const hasUpdate = !!(d.engineVersion && d.latestVersion && d.engineVersion !== d.latestVersion)
+      const engineJob = snap && snap.activeJobs && snap.activeJobs.engine
+      const checkJob = snap && snap.activeJobs && snap.activeJobs.check
+      const activeRun = (engineJob && engineJob.status === 'running') ? engineJob : null
+      const checkingNow = !!checking || !!(checkJob && checkJob.status === 'running')
       const overall = !engineOk ? 'notInstalled'
         : (!versionOk ? 'repair' : (!coreDepsOk || !coreModelsOk || !componentsOk ? 'partial' : 'ready'))
       const meta = {
@@ -262,7 +285,7 @@ window.__ModuleLoader__.load({
           h('div', { style: C.heroTop },
           h('span', { style: { ...C.dot, background: shown.tone.color } }),
           h('span', { style: C.heroTitle }, shown.title),
-          (busy === 'engine' || busy === 'stems' || busy === 'stems6s' || busy === 'asr')
+          (busy === 'engine' || busy === 'stems' || busy === 'stems6s' || busy === 'asr' || activeRun)
             ? h('div', { style: {
                 position: 'relative', overflow: 'hidden', width: '120px', height: '32px', padding: '0 8px', boxSizing: 'border-box',
                 fontSize: '12px', fontWeight: 600, lineHeight: '20px', borderRadius: '8px',
@@ -372,7 +395,7 @@ window.__ModuleLoader__.load({
           h('span', null, d.version ? t('checkedAt') + ' ' + (checkedAt || '—') : ''),
           h('span', { style: C.btnRow },
             h('button', { style: C.btn, disabled: !!busy, onClick: () => act('doctor') }, busy === 'doctor' ? t('running') : t('btnDoctor')),
-            h('button', { style: C.btn, disabled: !!busy || checking, onClick: checkUpdate }, checking ? '检查中…' : '检查更新'),
+            h('button', { style: C.btn, disabled: !!busy || checking, onClick: checkUpdate }, checkingNow ? '检查中…' : '检查更新'),
             h('button', { style: C.btn, disabled: !!busy, onClick: load }, t('refresh')))))
     }
 
