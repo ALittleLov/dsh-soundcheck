@@ -69,10 +69,10 @@ window.__ModuleLoader__.load({
       warn: { color: 'var(--dsw-alias-state-warn-primary, #d90)' },
       muted: { color: 'var(--dsw-alias-label-tertiary, #888)' },
       btnRow: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' },
-      btn: { padding: '5px 12px', fontSize: '12px', borderRadius: '8px', cursor: 'pointer',
+      btn: { padding: '6px 12px', fontSize: '12px', lineHeight: '20px', borderRadius: '8px', cursor: 'pointer', textAlign: 'center',
         border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.3))',
         background: 'transparent', color: 'var(--dsw-alias-label-primary, #eee)' },
-      primary: { padding: '6px 12px', fontSize: '12px', fontWeight: 600, borderRadius: '8px', cursor: 'pointer',
+      primary: { padding: '6px 12px', fontSize: '12px', fontWeight: 600, lineHeight: '20px', borderRadius: '8px', cursor: 'pointer', textAlign: 'center',
         border: '1px solid transparent', background: 'var(--dsw-alias-button-primary-fill, #4a7)',
         color: 'var(--dsw-alias-label-primary-foreground, #fff)' },
       details: { marginTop: '4px' },
@@ -130,6 +130,11 @@ window.__ModuleLoader__.load({
           .then((j) => {
             setState({ status: 'ok', data: j.data })
             setCheckedAt(new Date().toLocaleTimeString())
+            const active = j.data && j.data.activeJob
+            if (active && active.status === 'running') {
+              setBusy('engine')
+              poll(active.id)
+            }
           })
           .catch((e) => setState({ status: 'error', error: String((e && e.message) || e) }))
       }, [])
@@ -244,8 +249,8 @@ window.__ModuleLoader__.load({
           h('span', { style: C.heroTitle }, shown.title),
           busy
             ? h('div', { style: {
-                position: 'relative', overflow: 'hidden', minWidth: '170px',
-                padding: '7px 16px', fontSize: '12px', fontWeight: 600, borderRadius: '8px',
+                position: 'relative', overflow: 'hidden',
+                padding: '6px 12px', fontSize: '12px', fontWeight: 600, lineHeight: '20px', borderRadius: '8px',
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                 background: 'var(--dsw-alias-button-primary-fill, #4a7)',
                 color: 'var(--dsw-alias-label-primary-foreground, #fff)',
@@ -256,7 +261,7 @@ window.__ModuleLoader__.load({
                   background: 'repeating-linear-gradient(90deg, rgba(255,255,255,0) 0 18px, rgba(255,255,255,.28) 18px 36px)',
                   backgroundSize: '48px 100%', animation: 'dsc-move 1s linear infinite',
                 } }),
-                h('span', { style: { position: 'relative' } }, t('running') + ' · ' + elapsed + 's'))
+                h('span', { style: { position: 'relative' } }, '安装中 · ' + elapsed + 's'))
             : h('button', {
                 style: shown.primary ? C.primary : C.btn,
                 disabled: !!busy,
