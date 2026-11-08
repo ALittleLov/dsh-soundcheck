@@ -123,6 +123,16 @@ window.__ModuleLoader__.load({
       const [checkedAt, setCheckedAt] = useState('')
       const [elapsed, setElapsed] = useState(0)
       const [checking, setChecking] = useState(false)
+      // 引擎一旦离开“就绪”（坏了/修复中），彩蛋作废；修好后应显示正常就绪。
+      useEffect(() => {
+        const data = state.status === 'ok' ? state.data : null
+        const notReady = !data || data.engineState !== 'ready'
+        if (notReady && protectedMsg) {
+          setProtectedMsg(false)
+          try { localStorage.removeItem('dsc_protected') } catch { /* ignore */ }
+        }
+      }, [state, protectedMsg])
+
       const [protectedMsg, setProtectedMsg] = useState(() => { try { return localStorage.getItem('dsc_protected') === '1' } catch { return false } })
       const userClosedLog = useRef(false)
 
@@ -253,20 +263,12 @@ window.__ModuleLoader__.load({
         : d.engineState === 'broken' ? 'repair'
           : d.engineState === 'update_available' ? 'update'
             : (!engineOk ? 'repair' : 'ready')
-      // 引擎一旦离开“就绪”（坏了/修复中），彩蛋作废；修好后应显示正常就绪。
-      useEffect(() => {
-        if (overall !== 'ready' && protectedMsg) {
-          setProtectedMsg(false)
-          try { localStorage.removeItem('dsc_protected') } catch { /* ignore */ }
-        }
-      }, [overall, protectedMsg])
-
       const meta = {
         notInstalled: { tone: C.bad, title: t('statusNotInstalled'), hint: t('hintNotInstalled'), btn: t('btnInstall'), primary: true },
         repair: { tone: C.warn, title: t('statusRepair'), hint: t('hintRepair'), btn: t('btnRepair'), primary: true },
         partial: { tone: C.warn, title: t('statusPartial'), hint: t('hintPartial'), btn: t('btnFill'), primary: true },
         ready: { tone: C.ok, title: t('statusReady'), hint: t('hintReady'), btn: t('btnDoctor'), primary: false },
-        update: { tone: C.warn, title: '有可用更新', hint: d.engineVersion && d.latestVersion ? `当前 Engine ${d.engineVersion}，可更新到 ${d.latestVersion}；确认后才会升级。` : '', btn: '更新 Engine', primary: true },
+        update: { tone: C.warn, title: '有可用更新', hint: d.engineVersion && d.latestVersion ? `当前 Engine ${d.engineVersion}，可更新到 ${d.latestVersion}；确认后才会升级。` : '', btn: '更新引擎', primary: true },
       }[overall]
       const shown = overall === 'update'
         ? { tone: C.warn, title: '有可用更新', hint: `当前 Engine ${d.engineVersion}，可更新到 ${d.latestVersion}；确认后才会升级。`, btn: '更新 Engine', primary: true }
