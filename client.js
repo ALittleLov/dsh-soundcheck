@@ -248,15 +248,18 @@ window.__ModuleLoader__.load({
       const elapsedShown = (activeRun && activeRun.startedAt)
         ? Math.max(0, Math.floor((Date.now() - activeRun.startedAt) / 1000))
         : elapsed
-      const overall = !engineOk ? 'notInstalled'
-        : (!versionOk ? 'repair' : (!coreDepsOk || !coreModelsOk || !componentsOk ? 'partial' : 'ready'))
+      const overall = d.engineState === 'not_installed' ? 'notInstalled'
+        : d.engineState === 'broken' ? 'repair'
+          : d.engineState === 'update_available' ? 'update'
+            : (!engineOk ? 'repair' : 'ready')
       const meta = {
         notInstalled: { tone: C.bad, title: t('statusNotInstalled'), hint: t('hintNotInstalled'), btn: t('btnInstall'), primary: true },
         repair: { tone: C.warn, title: t('statusRepair'), hint: t('hintRepair'), btn: t('btnRepair'), primary: true },
         partial: { tone: C.warn, title: t('statusPartial'), hint: t('hintPartial'), btn: t('btnFill'), primary: true },
         ready: { tone: C.ok, title: t('statusReady'), hint: t('hintReady'), btn: t('btnDoctor'), primary: false },
+        update: { tone: C.warn, title: '有可用更新', hint: d.engineVersion && d.latestVersion ? `当前 Engine ${d.engineVersion}，可更新到 ${d.latestVersion}；确认后才会升级。` : '', btn: '更新 Engine', primary: true },
       }[overall]
-      const shown = hasUpdate && overall === 'ready'
+      const shown = overall === 'update'
         ? { tone: C.warn, title: '有可用更新', hint: `当前 Engine ${d.engineVersion}，可更新到 ${d.latestVersion}；确认后才会升级。`, btn: '更新 Engine', primary: true }
         : meta
       const doMain = () => act(overall === 'ready' ? 'doctor' : 'engine')
@@ -309,6 +312,9 @@ window.__ModuleLoader__.load({
                 onClick: doMain,
               }, shown.btn)),
           h('div', { style: C.hint }, shown.hint),
+        (overall === 'ready' && d.engineVersion && d.latestVersion && d.engineVersion !== d.latestVersion)
+          ? h('div', { style: { ...C.hint, ...C.muted } }, `本机 Engine ${d.engineVersion}，发布版 ${d.latestVersion}（比发布版新，不影响使用）`)
+          : null,
           (missingDeps.length || missingModels.length)
             ? h('div', { style: { ...C.hint, ...C.bad } }, '缺少：' + [...missingDeps, ...missingModels].join('、'))
             : null),
