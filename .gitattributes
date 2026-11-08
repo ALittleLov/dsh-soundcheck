@@ -1,1 +1,4 @@
 * text=auto eol=lf
+
+# 安装器按固定 SHA256 校验 class map，行尾不参与规范化
+engine/yamnet_class_map.csv -text

@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "plugin": "dsh-soundcheck",
+  "version": "0.9.12",
+  "engine_version": "0.1.1",
+  "note": "ONNX 权重不随本包分发。URL/SHA 硬编码在 lib/engine-installer.js；本清单供审计。下载由本项目托管（GitHub Release），属于分发行为，公开前需完成许可确认。",
+  "assets": [
+    {
+      "name": "yamnet.onnx",
+      "bundled": false,
+      "download_url": "https://hf-mirror.com/niobures/YAMNet/resolve/main/yamnetonnx/yamnet.onnx",
+      "license": "原始 Google YAMNet 为 Apache-2.0；niobures ONNX 转换仓库根目录未声明许可，公开再分发前需确认",
+      "sha256": "04e27fca08e7a3aea2630d1a63a51e6b437c803e0ff6e26399f80870ac251dda",
+      "size": 16124200,
+      "min_size": 16124200,
+      "local_verified": true
+    },
+    {
+      "name": "musicnn.onnx",
+      "bundled": false,
+      "download_url": "https://github.com/ALittleLov/dsh-soundcheck/releases/download/models-v1/musicnn.onnx",
+      "license": "原始 jordipons/musicnn 代码为 ISC；本项目 ONNX 权重的转换责任与授权链未证实，公开再分发前需确认",
+      "sha256": "a4d64c1dac195bdb118e789ddd38115c68028d26ad692448f5a8748e39490df6",
+      "size": 3192987,
+      "min_size": 3192987,
+      "local_verified": true
+    },
+    {
+      "name": "beat-this-final0.onnx",
+      "bundled": false,
+      "download_url": "https://github.com/ALittleLov/dsh-soundcheck/releases/download/models-v1/beat-this-final0.onnx",
+      "license": "CPJKU/beat_this 明确代码与公开权重为 MIT；需证明本项目 ONNX 由哪一份权重转出并保留声明",
+      "sha256": "e5e37b7d1802895e42559c5a1ced7619b1601d257a5c8e167c9d45de37c1b078",
+      "size": 82098846,
+      "min_size": 82098846,
+      "local_verified": true
+    },
+    {
+      "name": "frontend.json",
+      "bundled": false,
+      "download_url": "https://github.com/ALittleLov/dsh-soundcheck/releases/download/models-v1/frontend.json",
+      "license": "随 Beat This；按 Beat This MIT 记录，需确认字节来源",
+      "sha256": "7b2ba71db92b79cb33f45feb21854161de329b86a7e6ea686c3fec51ce85eb9f",
+      "size": 298186,
+      "min_size": 298186,
+      "local_verified": true
+    },
+    {
+      "name": "htdemucs_fp16weights.onnx",
+      "bundled": false,
+      "download_url": "https://github.com/ALittleLov/dsh-soundcheck/releases/download/models-v1/htdemucs_fp16weights.onnx",
+      "license": "StemSplitio/htdemucs-onnx 标注 MIT；SHA256 与上游一致",
+      "sha256": "d05c269d0178d2a72ad484b10b11dd370193fc923201c3b27a99f848745db70a",
+      "size": null,
+      "min_size": 165612636,
+      "local_verified": false
+    },
+    {
+      "name": "htdemucs_6s_fp16weights.onnx",
+      "bundled": false,
+      "download_url": "https://github.com/ALittleLov/dsh-soundcheck/releases/download/models-v1/htdemucs_6s_fp16weights.onnx",
+      "license": "StemSplitio/htdemucs-6s-onnx 标注 MIT；SHA256 与上游一致",
+      "sha256": "7ce55792e2231c93fbf92de95f5fd5b3a5e6c89f7db690dfd693e8f1dce56869",
+      "size": 136428532,
+      "min_size": 136428532,
+      "local_verified": true
+    }
+  ]
+}

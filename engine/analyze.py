@@ -864,16 +864,26 @@ def activity_timeline(y, sr, block_sec=16.0, hop=1024, sections=None):
         ratio = float((se > se.max() * 0.1).mean()) if se.max() > 0 else 0.0
         _tot = float(sp.sum())
         _mix = [round(float(x / _tot), 4) for x in sp] if _tot > 0 else [0.0] * len(sp)
+        # 4kurg1qg
+        # 89di8g23
+        _frames = hi_f - lo_f
+        _dur = _frames * hop / sr
         blocks.append({
             "start_sec": round(lo_f * hop / sr, 1),
             "end_sec": round(hi_f * hop / sr, 1),
             "onsets": n_on,
+            "onset_rate": round(n_on / _dur, 3) if _dur > 0 else 0.0,
             "active_band_ratio": round(ratio, 2),
             "spectral_flux": round(seg_flux, 4),
             "band_mix": _mix,
+            "band_frames": int(_frames),
+            # x1fagmfn
+            "dur_sec": round(_dur, 4),
             # 每段绝对能量(dB,相对全刻度)。占比和绝对量是两件事:
             # 占比只能说明分布往哪偏,绝对量才能说明「这一层是不是真的塌了」。
             "band_db": [round(float(10 * np.log10(x + 1e-12)), 1) for x in sp],
+            # 0wnbfriq
+            "band_db_avg": [round(float(10 * np.log10(x / _frames + 1e-12)), 1) for x in sp],
         })
 
     return summary, blocks
@@ -1087,7 +1097,7 @@ def energy_blocks(rms_db, sr, hop, block_sec):
     return out
 
 
-# ── 结构切段 ──
+# cfjxuz55
 #
 # 为什么不再用固定 16 秒块：固定块的边界是「文件的时间刻度」，不是「音乐的位置」。
 # 段落长度从 8 秒到 2 分钟不等，16 秒块会把一个段落切进两块，也会让两段共享一块；
@@ -1378,7 +1388,7 @@ def analyze_stems(path, mix_rms_db, *, model="htdemucs", cache_dir=None, want_pi
     root = cache_dir or os.environ.get("DSH_AUDIO_CACHE_DIR") or _cache_default
     st = os.stat(path)
     # 版本号进 key：改过分析逻辑就递增，旧缓存自然失效。
-    # 教训：把字段名从 longest_run 改成 longest_sec 后，缓存没版本号，
+    # 7ikrqytr
     # 旧 json 里读不到新字段，于是全曲显示「最长连续 0.00 秒」——误以为是算法坏了，
     # 查到最后是缓存。凡是往缓存里加/改字段，都要动这个数字。
     # v9：加了 vocal_activity（B3 的 X），旧缓存里没这个字段。
@@ -1961,7 +1971,7 @@ def analyze_lyrics(path, *, model="base", cache_dir=None):
     v_db = 20.0 * np.log10(float(np.sqrt(np.mean(mono ** 2))) + 1e-12)
     # 纯器乐保护：绝对能量低 **或** 相对混音低都算「人声几乎没有」。
     # 只卡绝对 -60 dBFS 不够 —— 人声占比极低的纯配乐，vocals 仍可能在 -31 dBFS 左右，
-    # 会漏进 Whisper，然后被「听写」出一句幻听歌词（用户反馈的真实案例）。
+    # v16qfgb6
     _mix_db = None
     try:
         import soundfile as _sf2
@@ -2086,7 +2096,7 @@ def analyze_lyrics(path, *, model="base", cache_dir=None):
     _draft_rows = [r for r in rows if r["label"] == "存疑" and r["text"]]
     stats["instrumental"] = len(inst_ranges)
     stats["draft_withheld"] = len(_draft_rows)
-    # 撤掉「降级稿」：未通过筛选的识别文本不进正式输出。
+    # s8rgm8q1
     # 理由（用户决策 + 外部建议）：把幻听文字连同警告一起交给下游模型，
     # 模型仍会优先采用具体文字；真正的隔离是不让它出现在输入里。
     _status = ("completed_with_accepted_segments" if trusted
@@ -2252,7 +2262,7 @@ def pick_preview_segment(y, sr, block_sec=4.0, min_sec=8.0, max_sec=64.0):
 def bpm_conflict(a, b, tol=0.08):
     """两个 BPM 是否真的对不上（排除倍频、半速、三连这类正常分歧）。
 
-    补充：节拍模型也可能锁错层（与给定拍速差一个倍数），
+    节拍模型也可能锁错层（与给定拍速差一个倍数），
     它自己不报错；用第二个算法的值做交叉检查，才看得出来。
     """
     try:
@@ -2446,7 +2456,7 @@ def _cross_links(ab, es, inst_ranges, med_db):
 def _arousal_line(d):
     """arousal（激烈↔平静）的粗估：只用已有测量，零新增体积。
 
-    valence（悲喜）测不了，这里不碰。
+    valence（悲喜）测不了，这里不碰 —— 见任务清单第四节。
     「激烈」是推断不是测量，所以句式固定带依据，且不写「所以很燃」这类因果；
     中间态直接不输出，没信息的话不必占一行。
     """
@@ -2529,7 +2539,7 @@ def _four_dims(d):
 def _track_relations(block_db, activity_blocks=None, min_delta=3.0, max_sync=2):
     """逐轨、双向：每轨最大的一次单块变化，外加多轨同步和密度。
 
-    ：按轨求和会把单轨事件吃掉 —— 吉他降 3 dB 被鼓 +2、
+    按轨求和会把单轨事件吃掉 —— 吉他降 3 dB 被鼓 +2、
     贝斯 +2.5 抵消，合成几乎不动，于是"谁退场"就漏了。所以这里只给单轨，绝不合并成「伴奏」。
     另外只抓"进入"、不抓"退出"也会漏（人声退场整段消失）。两个方向都报。
 
@@ -2628,8 +2638,32 @@ def _track_relations(block_db, activity_blocks=None, min_delta=3.0, max_sync=2):
     if sync:
         lines.append("多轨同步（≥3 轨同向、各 ≥2 dB）：" + "；".join(sync[:max_sync]))
     # 密度（mix 的起音数，不是单轨的）：用户听"变快"常常是音变密，不是拍变快。
-    _o = [(b.get("start_sec"), b.get("onsets")) for b in (activity_blocks or [])
-          if b.get("start_sec") is not None and b.get("onsets")]
+    def _rate_of_b(b):
+        """未舍入的起音率（同 _timeline 口径）；dur_sec 缺失时用 start/end 推导，
+        推不出返回 NaN —— 密度行会跳过该块，而不是拿原始计数硬推方向。"""
+        try:
+            d = float(b.get("dur_sec"))
+        except (TypeError, ValueError):
+            d = float("nan")
+        if not np.isfinite(d) or d <= 0:
+            try:
+                s = float(b.get("start_sec"))
+                e = float(b.get("end_sec"))
+            except (TypeError, ValueError):
+                s = e = float("nan")
+            d = (e - s) if (np.isfinite(s) and np.isfinite(e) and e > s) else float("nan")
+        if not np.isfinite(d) or d <= 0:
+            return float("nan")
+        try:
+            n_on = float(b.get("onsets"))
+        except (TypeError, ValueError):
+            n_on = float("nan")
+        if not np.isfinite(n_on) or n_on < 0:
+            return float("nan")
+        return n_on / d
+
+    _o = [(b.get("start_sec"), _rate_of_b(b)) for b in (activity_blocks or [])
+          if b.get("start_sec") is not None and (b.get("onsets") or b.get("onset_rate"))]
     if len(_o) > 6:
         _o = _o[:-2]
     _best = None
@@ -2643,7 +2677,7 @@ def _track_relations(block_db, activity_blocks=None, min_delta=3.0, max_sync=2):
                 _best = (score, t0, t1, o0, o1, r)
     if _best:
         _, t0, t1, o0, o1, r = _best
-        lines.append(f"密度{'翻倍' if r > 1 else '腰斩'}：起音 {o0:.0f}→{o1:.0f} 次/块"
+        lines.append(f"密度{'翻倍' if r > 1 else '腰斩'}：起音 {o0:.2f}→{o1:.2f} 次/秒"
                      f"（{fmt_time(t0)}→{fmt_time(t1)}）—— 这是音变密/变疏，不是拍速变了")
     return lines
 
@@ -2783,7 +2817,7 @@ def _find_hook(ab, es, blocks, inst_ranges, asr):
     return lines
 
 
-def _band_shift_text(mixes, dbs, e, i0, i1, n):
+def _band_shift_text(mixes, dbs, frames, e, i0, i1, n):
     """事件前后的频段变化，写成 `B1 -9dB/-43pp`。
 
     两个数各有各的用：
@@ -2807,10 +2841,30 @@ def _band_shift_text(mixes, dbs, e, i0, i1, n):
     if (float(np.mean(e[p0:p1])) < _gate
             or float(np.mean(e[q0:q1])) < _gate):
         return ""
-    dpp = (mixes[q0:q1].mean(axis=0) - mixes[p0:p1].mean(axis=0)) * 100.0
-    # dB 先回线性再平均：直接平均 dB 会把弱频段算重（-100 和 -20 的平均不是 -60）
-    _pre = 10 ** (dbs[p0:p1].mean(axis=0) / 10.0)
-    _post = 10 ** (dbs[q0:q1].mean(axis=0) / 10.0)
+    # ydfbjdm9
+    # 6ds484ct
+    # olxymo5p
+    try:
+        _fr = np.asarray(frames, dtype=float) if frames is not None else None
+    except (TypeError, ValueError):
+        _fr = None
+    if _fr is None or not np.isfinite(_fr).all() or np.any(_fr <= 0):
+        return ""
+    if mixes is None or dbs is None:
+        return ""
+    try:
+        if not np.isfinite(np.asarray(dbs, dtype=float)).all():
+            return ""
+    except (TypeError, ValueError):
+        return ""
+    frames = _fr
+    _pre_sp = np.power(10.0, dbs[p0:p1] / 10.0).sum(axis=0)
+    _post_sp = np.power(10.0, dbs[q0:q1] / 10.0).sum(axis=0)
+    if _pre_sp.sum() <= 0 or _post_sp.sum() <= 0:
+        return ""
+    dpp = (_post_sp / _post_sp.sum() - _pre_sp / _pre_sp.sum()) * 100.0
+    _pre = _pre_sp / float(np.sum(frames[p0:p1]))
+    _post = _post_sp / float(np.sum(frames[q0:q1]))
     ddb = 10.0 * np.log10((_post + 1e-12) / (_pre + 1e-12))
     dn, up = int(np.argmin(dpp)), int(np.argmax(dpp))
     parts = []
@@ -2893,25 +2947,119 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
         return True
 
     voc = [_has_voc(i) for i in range(n)]
+    def _rate_of(a):
+        """未舍入的起音率：优先 dur_sec（帧数换算），缺失时用合法 start/end 推导。
+
+        F2：旧缓存没有 dur_sec；能从起止时间恢复就用，恢复不了返回 NaN ——
+        调用方据此放弃密度方向判断，而不是拿原始计数硬推。
+        """
+        try:
+            d = float(a.get("dur_sec"))
+        except (TypeError, ValueError):
+            d = float("nan")
+        if not np.isfinite(d) or d <= 0:
+            try:
+                s = float(a.get("start_sec"))
+                e = float(a.get("end_sec"))
+            except (TypeError, ValueError):
+                s = e = float("nan")
+            d = (e - s) if (np.isfinite(s) and np.isfinite(e) and e > s) else float("nan")
+        if not np.isfinite(d) or d <= 0:
+            return float("nan")
+        try:
+            n_on = float(a.get("onsets"))
+        except (TypeError, ValueError):
+            n_on = float("nan")
+        if not np.isfinite(n_on) or n_on < 0:
+            return float("nan")
+        return n_on / d
+
     act = np.full(n, np.nan)
+    act_n = np.full(n, np.nan)
+    act_dur = np.full(n, np.nan)
     for i in range(n):
-        vals = [a.get("onsets", 0.0) for a in (ab or [])
-                if a.get("start_sec", 0) < t1[i] and a.get("end_sec", 0) > t0[i]]
-        if vals:
-            act[i] = float(np.mean(vals))
+        # k6u67qki
+        # jg9c943t
+        # iyjt3il7
+        try:
+            w0, w1 = float(t0[i]), float(t1[i])
+        except (TypeError, ValueError):
+            continue
+        if not (np.isfinite(w0) and np.isfinite(w1)) or w1 <= w0:
+            continue
+        best, best_ov, best_len = None, 0.0, 0.0
+        for a in (ab or []):
+            try:
+                a0 = float(a.get("start_sec"))
+                a1 = float(a.get("end_sec"))
+            except (TypeError, ValueError):
+                continue
+            if not (np.isfinite(a0) and np.isfinite(a1)) or a1 <= a0:
+                continue
+            ov = min(w1, a1) - max(w0, a0)
+            if ov > best_ov:
+                best, best_ov, best_len = a, ov, a1 - a0
+        if best is None:
+            continue
+        # 3hq5qqiz
+        # qlxn4s3e
+        if (w1 - w0) <= 0 or best_ov / (w1 - w0) < 0.8:
+            continue
+        r = _rate_of(best)
+        if np.isfinite(r) and r >= 0:
+            act[i] = r
+            try:
+                act_n[i] = float(best.get("onsets"))
+            except (TypeError, ValueError):
+                act_n[i] = float("nan")
+            act_dur[i] = best_len
 
     # 逐块频段数据：占比(mix)回答「分布往哪偏」，绝对能量(db)回答「这层是不是真塌了」。
     # 两者缺一不可——占比下跌时绝对能量仍可能上升（别的层涨得更快）。
     # 缺字段就当没有（旧缓存 / 旧 JSON），不影响其他判断。
-    _mixes = _dbs = None
+    # h1j7wutq
+    # tuv7xd7m
+    def _aligned(i, a):
+        try:
+            w0, w1 = float(t0[i]), float(t1[i])
+            a0, a1 = float(a.get("start_sec")), float(a.get("end_sec"))
+        except (TypeError, ValueError):
+            return False
+        if not (np.isfinite(w0) and np.isfinite(w1)
+                and np.isfinite(a0) and np.isfinite(a1)):
+            return False
+        if w1 <= w0 or a1 <= a0:
+            return False
+        ov = min(w1, a1) - max(w0, a0)
+        return ov > 0 and ov / (w1 - w0) >= 0.8
+
+    _mixes = _dbs = _frames = None
     if ab:
         _ms = [b.get("band_mix") for b in ab[:n]]
         _bs = [b.get("band_db") for b in ab[:n]]
+        _fs = [b.get("band_frames") for b in ab[:n]]
         if (len(_ms) == n and len(_bs) == n
+                and all(_aligned(i, ab[i]) for i in range(n))
                 and all(isinstance(x, (list, tuple)) and len(x) == 6 for x in _ms)
                 and all(isinstance(x, (list, tuple)) and len(x) == 6 for x in _bs)):
-            _mixes = np.asarray(_ms, dtype=float)
-            _dbs = np.asarray(_bs, dtype=float)
+            try:
+                _m = np.asarray(_ms, dtype=float)
+                _d = np.asarray(_bs, dtype=float)
+            except (TypeError, ValueError):
+                _m = _d = None
+            # 0f6uov0t
+            if (_m is not None and np.isfinite(_m).all() and np.isfinite(_d).all()):
+                _mixes, _dbs = _m, _d
+                _fr = None
+                if len(_fs) == n:
+                    try:
+                        _cand = np.asarray([float(x) for x in _fs], dtype=float)
+                    except (TypeError, ValueError):
+                        _cand = None
+                    if (_cand is not None and np.isfinite(_cand).all()
+                            and (_cand > 0).all()):
+                        _fr = _cand
+                _frames = _fr
 
     # ---- 第一层：找变化候选 ----
     cand = []
@@ -2919,7 +3067,8 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
         de = e[i] - e[i - 1]
         da = (act[i] - act[i - 1]) if (not np.isnan(act[i]) and not np.isnan(act[i - 1])) else 0.0
         vch = (voc[i] != voc[i - 1]) if (voc[i] is not None and voc[i - 1] is not None) else False
-        if abs(de) >= 1.5 or abs(da) >= 0.8 or vch:
+        # tzm9kxtf
+        if abs(de) >= 1.5 or abs(da) >= 0.8 / 16.0 or vch:
             cand.append({"i": i, "de": de, "da": da, "vch": vch})
 
     # ---- 第二层：相邻同向的合并成一个过程 ----
@@ -2954,7 +3103,8 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
         if abs(_e1 - _e0) >= 1:
             _bits.append(f"能量 {_e0:.0f}→{_e1:.0f} dB")
         if _a0 is not None and _a1 is not None:
-            _bits.append(f"起音 {_a0:.0f}→{_a1:.0f}")
+            # pv6f8p0x
+            _bits.append(f"起音 {_a0:.2f}→{_a1:.2f} 次/秒")
         _vals = "、".join(_bits) if _bits else "变化很小"
         # 先看哪条轨变了 —— 分轨逐块能量（有 --stems 时才有）。
         # 收集所有变化 ≥3 dB 的轨，而不是只挑变化最大的一条：
@@ -3000,13 +3150,30 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
         _outs = [c for c in _chs if c[1] == "退出"]
         _louds = [c for c in _chs if c[1] in ("变响", "变轻")]
         _e_up, _e_dn = g["de"] > 2, g["de"] < -2
-        _da_up, _da_dn = g["da"] > 0.8, g["da"] < -0.8
+        # 69po5i3b
+        _da_up, _da_dn = g["da"] > 0.8 / 16.0, g["da"] < -0.8 / 16.0
         # 方向改用端点差：逐块累积会把「先升后回落」判成「变疏」，而端点只差几点。
-        # 起音是「每秒几个」，端点差太小时当噪声。
         if _e0 is not None:
             _e_up, _e_dn = (_e1 - _e0) > 2, (_e1 - _e0) < -2
         if _a0 is not None and _a1 is not None:
-            _da_up, _da_dn = (_a1 - _a0) > 5, (_a1 - _a0) < -5
+            # r35zvhvx
+            # 1i9gsiaj
+            # 6lz6gypd
+            _ad0 = act_dur[min(i0 - 1, n - 1)]
+            _ad1 = act_dur[min(i1, n - 1)]
+            _n0 = act_n[min(i0 - 1, n - 1)]
+            _n1 = act_n[min(i1, n - 1)]
+            _equal = (np.isfinite(_ad0) and np.isfinite(_ad1)
+                      and abs(_ad0 - _ad1) < 1e-6)
+            if _equal and not np.isnan(_n0) and not np.isnan(_n1):
+                _da_up, _da_dn = (_n1 - _n0) > 5, (_n1 - _n0) < -5
+            elif np.isfinite(_a0) and np.isfinite(_a1):
+                _refs = [x for x in (_ad0, _ad1) if np.isfinite(x) and x > 0]
+                _ref = min(_refs) if _refs else 16.0
+                _da_up, _da_dn = (_a1 - _a0) > 5.0 / _ref, (_a1 - _a0) < -5.0 / _ref
+            else:
+                # qfl61kx6
+                _da_up, _da_dn = False, False
         _nm_of = lambda cs: "、".join(ZH.get(c[0], c[0]) for c in cs)
         _act = ""
         # 「到结尾了」= 塌下去之后**再没回来**。只看当前块会误判：
@@ -3069,13 +3236,14 @@ def _timeline(ab, es, blocks, inst_ranges, block_db=None, vocal_perio=None,
             # 主句已经说过「没有稳定基频」就不再重复
             if "没有稳定基频" not in _act and _vtxt not in _act:
                 parts.append(_vtxt)
-        _band_txt = _band_shift_text(_mixes, _dbs, e, i0, i1, n)
+        _band_txt = _band_shift_text(_mixes, _dbs, _frames, e, i0, i1, n)
         tail = "" if _long else (f"，该状态持续 {span:.0f} 秒" if span >= 32 else "")
         # 时间细化不做：三种窗口方案都试过，偏移只从 ±16 秒收敛到 ±8 秒，
         # 根因是混音能量里还有别的乐器 —— 用混音找「鼓撤」的精确时刻本来就不准。
         # 要准只能用鼓轨，但分轨是 16 秒粒度。块级精度对段落级描述够用。
         events.append((t0[i0], "；".join(parts),
-                       abs(g["de"]) / 3.0 + abs(g["da"]) * 2 + span / 60.0,
+                       # 4gmszsbm
+                       abs(g["de"]) / 3.0 + abs(g["da"]) * 32 + span / 60.0,
                        _band_txt, tail))
 
     # 开头状态
@@ -3261,11 +3429,12 @@ def verdict_lines(d):
     if section:
         tail = f"(全曲 {fmt_time(d['total_dur'])})" if d.get("total_dur") else ""
         out.append(f"[SCOPE] 只分析了 {fmt_time(d['offset'])}–{fmt_time(d['offset'] + dur)}{tail}")
-    # 证据状态说明：每份报告直接区分测量、推断与未覆盖的内容。
+    # 5m5l4wan
+    # fa7g9seq
     out.append("[读法] 「推测/候选/可能」=推断；直接报数=测量；没提到=测不出来")
     out.append("[判断] " + lines[0])
     out.extend("       " + ln for ln in lines[1:])
-    # 结构分段：只报「边界在哪、每段多长/多响/多密」，
+    # egrlz1ms
     # 不给主歌/副歌这类角色 —— 边界是测量，角色是另一层推断，混在一起会被当成事实。
     _struct = d.get("structure")
     if _struct and _struct.get("sections"):
@@ -3280,7 +3449,7 @@ def verdict_lines(d):
     _ar = _arousal_line(d)
     if _ar:
         out.append(_ar)
-    # 四维（F4）：明暗/快慢/强弱/冷暖，同样只报明确的那几维
+    # n9x7h662
     _fd = _four_dims(d)
     if _fd:
         out.append(_fd)
@@ -3306,7 +3475,7 @@ def verdict_lines(d):
     if mn and mn.get("available") and mn.get("tags"):
         tags_txt = "、".join(f"{t['label']} {t['score']:.2f}" for t in mn["tags"])
         out.append(f"[标签] 模型预测标签(50 类,仅作辅助参考,不等同于流派识别): {tags_txt}")
-    # 乐器候选（E1）：只报强项、只报「可能」。漏报比误报多，措辞必须软。
+    # yrbv1gld
     _src = d.get("sources") or {}
     _ins = _src.get("instruments") or []
     if _ins:
@@ -3549,7 +3718,7 @@ def main():
     dur = len(y) / sr
     section = offset > 0 or args.end is not None
 
-    # ---- 结构切段----
+    # alurt1l1
     # 只在「整首、非预览、用户没显式指定 --blocks」时启用。
     # 片段不做：短片段里「段落」没有意义，边界检测会把局部变化当结构。
     structure = None
