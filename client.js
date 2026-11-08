@@ -245,6 +245,9 @@ window.__ModuleLoader__.load({
       const checkJob = snap && snap.activeJobs && snap.activeJobs.check
       const activeRun = (engineJob && engineJob.status === 'running') ? engineJob : null
       const checkingNow = !!checking || !!(checkJob && checkJob.status === 'running')
+      const elapsedShown = (activeRun && activeRun.startedAt)
+        ? Math.max(0, Math.floor((Date.now() - activeRun.startedAt) / 1000))
+        : elapsed
       const overall = !engineOk ? 'notInstalled'
         : (!versionOk ? 'repair' : (!coreDepsOk || !coreModelsOk || !componentsOk ? 'partial' : 'ready'))
       const meta = {
@@ -299,7 +302,7 @@ window.__ModuleLoader__.load({
                   background: 'repeating-linear-gradient(90deg, rgba(255,255,255,0) 0 18px, rgba(255,255,255,.28) 18px 36px)',
                   backgroundSize: '48px 100%', animation: 'dsc-move 1s linear infinite',
                 } }),
-                h('span', { style: { position: 'relative' } }, '安装中 · ' + elapsed + 's'))
+                h('span', { style: { position: 'relative' } }, '安装中 · ' + elapsedShown + 's'))
             : h('button', {
                 style: shown.primary ? C.primary : C.btn,
                 disabled: !!busy,
