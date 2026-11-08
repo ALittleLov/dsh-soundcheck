@@ -123,16 +123,6 @@ window.__ModuleLoader__.load({
       const [checkedAt, setCheckedAt] = useState('')
       const [elapsed, setElapsed] = useState(0)
       const [checking, setChecking] = useState(false)
-      // 引擎一旦离开“就绪”（坏了/修复中），彩蛋作废；修好后应显示正常就绪。
-      useEffect(() => {
-        const data = state.status === 'ok' ? state.data : null
-        const notReady = !data || data.engineState !== 'ready'
-        if (notReady && protectedMsg) {
-          setProtectedMsg(false)
-          try { localStorage.removeItem('dsc_protected') } catch { /* ignore */ }
-        }
-      }, [state, protectedMsg])
-
       const [protectedMsg, setProtectedMsg] = useState(() => { try { return localStorage.getItem('dsc_protected') === '1' } catch { return false } })
       const userClosedLog = useRef(false)
 
@@ -155,6 +145,16 @@ window.__ModuleLoader__.load({
       useEffect(() => { load() }, [load])
 
       // 后端任务是唯一事实来源：挂载即订阅，卸载即取消；不依赖组件本地 busy。
+      // 引擎一旦离开“就绪”（坏了/修复中），彩蛋作废；修好后应显示正常就绪。
+      useEffect(() => {
+        const data = state.status === 'ok' ? state.data : null
+        const notReady = !data || data.engineState !== 'ready'
+        if (notReady && protectedMsg) {
+          setProtectedMsg(false)
+          try { localStorage.removeItem('dsc_protected') } catch { /* ignore */ }
+        }
+      }, [state, protectedMsg])
+
       const [snap, setSnap] = useState(null)
       useEffect(() => {
         let alive = true
