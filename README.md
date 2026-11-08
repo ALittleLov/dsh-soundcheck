@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
-**DSH 的本地音乐分析插件**。通过独立的 [Music Evidence Engine](https://github.com/ALittleLov/music-evidence-engine-public) 提取可核对的音乐证据，让 Agent 能依据具体测量与时间位置讨论音频，而不只是猜测。
+**DSH 的本地音乐分析插件**。通过独立的 [Music Evidence Engine](https://github.com/ALittleLov/music-evidence-engine) 提取可核对的音乐证据，让 Agent 能依据具体测量与时间位置讨论音频，而不只是猜测。
 
 - **本地、CPU 运行**：不要求独立显卡；分析音频不会上传到云端。首次安装依赖、下载模型需要联网。
 - **分析内容**：速度、调性候选、响度与能量、频段、结构变化、时间线、人声及乐器候选等；支持文本与 JSON 证据。
@@ -26,6 +26,6 @@
 
 ## 项目与许可
 
-[Music Evidence Engine（独立引擎）](https://github.com/ALittleLov/music-evidence-engine-public) · [最新 Soundcheck 版本](https://github.com/ALittleLov/dsh-soundcheck/releases/latest)
+[Music Evidence Engine（独立引擎）](https://github.com/ALittleLov/music-evidence-engine) · [最新 Soundcheck 版本](https://github.com/ALittleLov/dsh-soundcheck/releases/latest)
 
 主要在 Windows 上验证。代码采用 MIT 许可，第三方依赖与模型遵循各自许可。
