@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
       nav: '音频分析', title: 'dsh-soundcheck', subtitle: '本地音频分析引擎',
       core: '核心分析', diag: '诊断与日志', optional: '按需功能',
       statusNotInstalled: '引擎尚未安装', statusRepair: '引擎需要修复',
-      statusPartial: '部分分析能力可用', statusReady: '核心分析已就绪',
+      statusPartial: '部分分析能力可用', statusReady: '核心分析引擎已全面就绪',
       hintNotInstalled: '首次安装会准备 Python 环境、核心依赖与必需模型。',
       hintRepair: '检测到核心组件缺失或版本不一致，修复后恢复正常。',
       hintPartial: '核心分析部分受损，补齐缺失组件后恢复。',
