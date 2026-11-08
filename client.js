@@ -292,8 +292,8 @@ window.__ModuleLoader__.load({
           h('div', { style: C.heroTop },
           h('span', { style: { ...C.dot, background: shown.tone.color } }),
           h('span', {
-            style: overall === 'ready' ? { ...C.heroTitle, cursor: 'pointer' } : C.heroTitle,
-            onClick: overall === 'ready' ? () => setProtectedMsg((v) => !v) : undefined,
+            style: overall === 'ready' && !protectedMsg ? { ...C.heroTitle, cursor: 'pointer' } : C.heroTitle,
+            onClick: overall === 'ready' && !protectedMsg ? () => setProtectedMsg(true) : undefined,
           }, overall === 'ready' && protectedMsg ? '您已处于大肥鱼强大的保护之中' : shown.title),
           (busy === 'engine' || busy === 'stems' || busy === 'stems6s' || busy === 'asr' || activeRun)
             ? h('div', { style: {
