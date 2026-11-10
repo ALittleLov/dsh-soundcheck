@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "plugin": "dsh-soundcheck",
-  "version": "1.0.1",
-  "engine_version": "0.1.1",
+  "version": "1.0.4",
+  "engine_version": "0.1.2",
   "note": "模型来源以 Engine 的 models.json 为准；本清单仅供审计。权重不随本包分发，除 musicnn 由 Engine 内置。",
   "assets": [
     {
