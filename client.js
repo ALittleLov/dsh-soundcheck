@@ -368,8 +368,6 @@ window.__ModuleLoader__.load({
             title: '音轨分离（4 轨）',
             desc: optionalStems ? '已就绪：人声 / 鼓 / 贝斯 / 其他' : '未安装：人声 / 鼓 / 贝斯 / 其他',
             tone: optionalStems ? null : C.bad.color,
-            action: h('span', { style: C.btnRow },
-              h('button', { style: C.btn, disabled: !!busy, onClick: (e) => { e.stopPropagation(); act('stems') } }, optionalStems ? '重新安装' : '安装')),
           }, null),
           h(Item, {
             title: t('dirs'),
